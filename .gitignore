@@ -1,0 +1,21 @@
+# Stata editor backup files
+*.tmp.*
+
+# Stata logs and output
+*.log
+*.smcl
+
+# Stata datasets and graphs (don't commit binary artifacts)
+*.dta
+*.gph
+*.png
+*.pdf
+
+# macOS / Windows scratch
+.DS_Store
+Thumbs.db
+
+# Editor scratch
+*~
+.vscode/
+.idea/

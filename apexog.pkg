@@ -1,0 +1,55 @@
+v 3
+d 'APEXOG': module to estimate APE/AIE bounds in a control-function probit under plausibly-exogenous IVs (Conley, Hansen, & Rossi 2012)
+d
+d   apexog estimates Conley, Hansen, and Rossi's (2012)
+d  "plausibly exogenous" UCI and LTZ bounds with the Average Partial
+d   Effect (APE; probability scale) of an endogenous regressor in a
+d   control-function probit (cfprobit) as the target functional --
+d   rather than the latent-index coefficient targeted by Damian
+d   Clarke's plausexog (which works on ivregress 2sls).
+d
+d   With aie(X Z), the target switches to the Average Interaction
+d   Effect for the continuous-by-continuous interaction c.X##c.Z,
+d   in the style of ginteff (Radean 2023).
+d
+d   Inference uses a Murphy-Topel two-step sandwich computed in
+d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
+d   margins, dydx() to machine precision.
+d
+d   Features (v0.12.0):
+d     - RENAMED from plausexog_ape to apexog (no behavioral change)
+d
+d   Features (v0.11.0):
+d     - target() accepts fv interaction specs for AIE:
+d       target(c.X#c.Z) -> cts x cts cross-partial
+d       target(c.X#i.d) -> cts x binary firstdiff
+d       target(i.X#i.d) -> binary x binary 2nd discrete diff
+d     - prefixes OVERRIDE value-based type auto-detection
+d     - aie() retained as back-compat shorthand
+d
+d   Features (v0.10.0):
+d     - i./c. prefix on (endog = iv) clause auto-defaults the first-stage
+d       type ((c.d=z) -> linear, (i.d=z) -> probit)
+d     - target() option narrows which endogenous regressor's APE is reported
+d
+d   Features (v0.9.0):
+d     - methods: uci, ltz
+d     - targets: APE (default) or AIE via aie(X Z)
+d     - first stages: linear, probit, fprobit, poisson
+d     - 1+ endogenous regressors with multi-clause syntax
+d       (d1=z1 z2)(d2=z3) for per-endog instrument sets
+d     - LTZ priors: Gaussian via mu()/omega(), OR distribution()
+d       (normal, uniform, chi2, t, gamma, poisson, special)
+d     - vce: robust (default), cluster
+d     - optional graph output for UCI bounds and LTZ histogram
+d
+d   Requires: Stata 18.5 (StataNow) -- cfprobit / cfregress are
+d            StataNow commands.
+d
+d Author: ARK
+d Support: see project repository
+d
+d Distribution-Date: 20260527
+d
+f apexog.ado
+f apexog.sthlp

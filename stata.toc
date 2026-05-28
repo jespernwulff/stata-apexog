@@ -1,0 +1,9 @@
+v 3
+d  Stata modules from the 2026 plausexog project
+d
+d  These modules extend Conley, Hansen, and Rossi's (2012)
+d  "plausibly exogenous" framework -- originally implemented in
+d  Damian Clarke's plausexog (SSC) for the 2SLS coefficient --
+d  to additional target functionals.
+d
+p apexog    APE bounds for cfprobit under plausibly-exogenous IVs
