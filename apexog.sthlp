@@ -439,7 +439,8 @@ Murphy-Topel correction for the generated regressor.]}
 {title:Author}
 
 {pstd}
-ARK, in collaboration with Claude (Anthropic).  2026.
+Jesper N. Wulff, Department of Economics and Business Economics,
+Aarhus University.  {browse "mailto:jwulff@econ.au.dk":jwulff@econ.au.dk}
 
 
 {title:Also see}

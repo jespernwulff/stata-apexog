@@ -46,8 +46,8 @@ d
 d   Requires: Stata 18.5 (StataNow) -- cfprobit / cfregress are
 d            StataNow commands.
 d
-d Author: ARK
-d Support: see project repository
+d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhus University
+d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d
 d Distribution-Date: 20260527
 d
