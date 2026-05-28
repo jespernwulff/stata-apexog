@@ -1,5 +1,8 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
 *! Version 0.12.0  2026-05-27
+*! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
+*! the MIT License -- see https://github.com/jespernwulff/stata-apexog
+*! SPDX-License-Identifier: MIT
 *! Targets the Average Partial Effect (APE) -- or, with target(c.X#i.d) or the
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,

@@ -443,6 +443,15 @@ Jesper N. Wulff, Department of Economics and Business Economics,
 Aarhus University.  {browse "mailto:jwulff@econ.au.dk":jwulff@econ.au.dk}
 
 
+{title:License}
+
+{pstd}
+{cmd:apexog} is distributed under the MIT License.  Copyright (c) 2026
+Jesper N. Wulff.  See
+{browse "https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE":LICENSE}
+for the full text.
+
+
 {title:Also see}
 
 {psee}
