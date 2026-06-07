@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.13.1  2026-06-06}{...}
+{* *! version 0.13.2  2026-06-07}{...}
 {vieweralsosee "[R] cfprobit" "help cfprobit"}{...}
 {vieweralsosee "[R] cfregress" "help cfregress"}{...}
 {viewerjumpto "Syntax" "apexog##syntax"}{...}

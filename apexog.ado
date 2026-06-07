@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.13.1  2026-06-06
+*! Version 0.13.2  2026-06-07
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,15 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.13.2 changelog (vs v0.13.1) -- cosmetic, no numeric change:
+*!   - The instrument-cleaning step (v0.13.1) ran _rmcoll noisily, spilling
+*!     cryptic "note: __000002 omitted because of collinearity" lines (tempvar
+*!     names) into the output -- alarming and uninformative.  _rmcoll is now
+*!     quiet; instead, when degenerate/collinear instrument terms are dropped,
+*!     a single clear note reports how many were dropped, which full-rank
+*!     instruments are retained (original names), and how many
+*!     gmin/gmax/mu/omega values are needed (or that a single value broadcasts).
 *!
 *! v0.13.1 changelog (vs v0.13.0) -- "full-rank instrument cleaning":
 *!   - FACTOR-VARIABLE INSTRUMENTS now work.  fvexpand of e.g.
@@ -462,6 +471,7 @@ program apexog, eclass
     *      `ivlabels' keeps the original term names for display/ereturn.  This is
     *      a no-op for already-clean continuous instruments.
     *==========================================================================
+    local _raw_iv_n : word count `varlist_iv'
     tempvar _cl_touse
     qui gen byte `_cl_touse' = 1
     markout `_cl_touse' `yvar' `varlist1' `varlist2' `varlist_iv' `aieendog_tempvar'
@@ -486,7 +496,7 @@ program apexog, eclass
             local _cand_names `_cand_names' `_t'
             local _cand_tv    `_cand_tv' `_cc'
         }
-        _rmcoll `_ctrl_tv' `_cand_tv' if `_cl_touse'
+        qui _rmcoll `_ctrl_tv' `_cand_tv' if `_cl_touse'
         local _surv `r(varlist)'
         local _ivj ""
         local _ii = 0
@@ -512,6 +522,12 @@ program apexog, eclass
     local count_iv : word count `varlist_iv'
     if `count_iv' < 1 {
         _apexogerr "No usable instruments remain after dropping degenerate/collinear terms."
+    }
+    if `_raw_iv_n' > `count_iv' {
+        local _ndrop = `_raw_iv_n' - `count_iv'
+        di as text "  [note] `_ndrop' of `_raw_iv_n' instrument term(s) dropped (base-level, e.g. 0b., or collinear with the controls / other instruments)."
+        di as text "         `count_iv' full-rank instrument(s) retained: `ivlabels'"
+        di as text "         gmin()/gmax()/mu()/omega() take `count_iv' value(s) -- or a single value, broadcast to all."
     }
 
     local countmin : word count `gmin'
