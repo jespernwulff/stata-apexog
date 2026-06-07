@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.12.0  2026-05-27}{...}
+{* *! version 0.13.1  2026-06-06}{...}
 {vieweralsosee "[R] cfprobit" "help cfprobit"}{...}
 {vieweralsosee "[R] cfregress" "help cfregress"}{...}
 {viewerjumpto "Syntax" "apexog##syntax"}{...}
@@ -41,15 +41,16 @@ where {it:method} is one of:
 {synopt:{opt est:imator(cfprobit)}}main-equation estimator; only {cmd:cfprobit} is supported (default){p_end}
 {synopt:{opt fir:ststage(}{it:type}{cmd:)}}first-stage model: {opt linear} (default), {opt probit}, {opt fprobit}, or {opt poisson}.  Accepts one type (applied to all endogs) or one per endog.{p_end}
 {synopt:{opt aie(}{it:X Z}{cmd:)}}switch the sensitivity target from the APE to the Average Interaction Effect of the continuous-by-continuous interaction {cmd:c.}{it:X}{cmd:##c.}{it:Z}.  See {it:ginteff} (Radean 2023).{p_end}
+{synopt:{opt cfint:eract}}add the products of the control functions to the main probit (replicates {help cfprobit}'s {cmd:cfinteract}).  Auto-on when an interaction of an endogenous treatment with a moderator is declared as an endogenous regressor (see below).{p_end}
 
 {syntab:UCI (method = uci)}
-{synopt:{opt gmin(numlist)}}lower bound of assumed gamma range; one value per instrument{p_end}
-{synopt:{opt gmax(numlist)}}upper bound of assumed gamma range; one value per instrument{p_end}
+{synopt:{opt gmin(numlist)}}lower bound of assumed gamma range; one value per instrument (a single value is broadcast to all){p_end}
+{synopt:{opt gmax(numlist)}}upper bound of assumed gamma range; one value per instrument (a single value is broadcast to all){p_end}
 {synopt:{opt grid(#)}}number of grid points per instrument; default {cmd:grid(11)}{p_end}
 
 {syntab:LTZ (method = ltz)}
-{synopt:{opt mu(numlist)}}Gaussian prior mean for each instrument's gamma{p_end}
-{synopt:{opt omega(numlist)}}Gaussian prior variance for each instrument's gamma{p_end}
+{synopt:{opt mu(numlist)}}Gaussian prior mean for each instrument's gamma (single value broadcast to all){p_end}
+{synopt:{opt omega(numlist)}}Gaussian prior variance for each instrument's gamma (single value broadcast to all){p_end}
 {synopt:{opt iter:ations(#)}}number of Monte-Carlo draws; default {cmd:iterations(1000)}{p_end}
 {synopt:{opt seed(#)}}random-number seed for reproducibility{p_end}
 
@@ -279,10 +280,17 @@ moderators under plausible exclusion-restriction violations:}{p_end}
 {phang}{cmd:. apexog uci y X Z (d = Z2), gmin(-0.3) gmax(0.3) grid(11) aie(X Z)}{p_end}
 {phang}{cmd:. apexog ltz y X Z (d = Z2), mu(0) omega(0.0025) iterations(2000) aie(X Z)}{p_end}
 
-{pstd}{ul:Canonical case: interaction of an endogenous treatment d with an
-exogenous moderator X (the X*d term is endogenous; the wrapper handles
-this automatically):}{p_end}
-{phang}{cmd:. apexog uci y X (d = Zinst), gmin(-0.3) gmax(0.3) grid(11) aie(d X)}{p_end}
+{pstd}{ul:Canonical case (v0.13): interaction of an ENDOGENOUS treatment d with
+a moderator X.  Because d*X is itself endogenous, declare it as a SECOND
+endogenous regressor and instrument it (typically with the base instrument(s)
+and their moderator interactions), exactly as in {help cfprobit} / {help plausexog}.
+{cmd:cfinteract} is auto-on and the AIE is reported on the probability scale:}{p_end}
+{phang}{cmd:. apexog uci y X (c.d c.d#c.X = Zinst c.Zinst#c.X),}{p_end}
+{phang}{cmd:      target(c.d#c.X) gmin(-0.3 -0.3) gmax(0.3 0.3) grid(11)}{p_end}
+
+{pstd}{it:Note:} the older {cmd:aie(d X)} form (with d in a single endog clause
+{cmd:(d = Zinst)}) treats {cmd:d*X} as an exogenous control -- a mis-specification
+when d is endogenous.  Prefer the explicit two-endog form above.{p_end}
 
 
 {marker results}{...}
@@ -339,6 +347,18 @@ For {cmd:method = ltz}, also:
 
 {marker methods}{...}
 {title:Methods and formulas}
+
+{pstd}
+{ul:Factor-variable instruments.}  Factor instruments (e.g.
+{cmd:dummy##c.eldisadv}) are expanded and then cleaned to full rank: base
+levels ({cmd:0b.}), the moderator main effect, and bare-vs-factor duplicates
+that are collinear with the controls are dropped (data-based, via {cmd:_rmcoll}),
+and each surviving instrument is materialised as a plain variable.  This keeps
+the first-stage design matrix full rank so the Murphy-Topel VCE is well-defined.
+The reported instrument count (and hence the required number of
+{cmd:gmin()}/{cmd:gmax()}/{cmd:mu()}/{cmd:omega()} values, unless a single value
+is broadcast) is the cleaned, full-rank count; {cmd:e(instruments)} lists the
+retained terms.
 
 {pstd}
 Following Conley, Hansen, and Rossi (2012), the main equation is

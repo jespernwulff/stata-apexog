@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.12.0  2026-05-27
+*! Version 0.13.1  2026-06-06
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,47 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.13.1 changelog (vs v0.13.0) -- "full-rank instrument cleaning":
+*!   - FACTOR-VARIABLE INSTRUMENTS now work.  fvexpand of e.g.
+*!     dummy##c.eldisadv leaves base levels (0b.) and bare-vs-factor /
+*!     moderator duplicates that are collinear with the controls; these
+*!     degenerate columns made the Murphy-Topel first-stage W rank-deficient
+*!     (singular M_pi -> non-PSD VCE -> a MISSING AIE/APE SE on factor-heavy
+*!     IV specs).  The instrument list is now cleaned to full rank (data-based,
+*!     via _rmcoll against the controls) and each surviving instrument is
+*!     materialised as a plain tempvar (no later factor re-expansion can
+*!     reintroduce a base level).  On master_rev2 the AIE SE is now finite and
+*!     the point AIE matches ginteff after the manual decomposition to machine
+*!     precision (sanity 34: point diff -1.2e-11, SE 0.0318 vs missing pre-fix).
+*!     No-op for already-clean continuous instruments (sanity 06/24/31/32
+*!     byte-identical).  e(instruments) shows the cleaned term names.
+*!   - A SINGLE gmin/gmax/mu/omega value is now broadcast to all instruments
+*!     (handy since the instrument count is the cleaned, full-rank count).
+*!   - NOTE (correcting the v0.13.0 log): apexog's point AIE was never wrong on
+*!     the real data -- it matches ginteff exactly.  The earlier apparent
+*!     "divergence" used cfprobit's predict, xb as the oracle, which differs
+*!     from the standard latent index.  The only real bug was the missing SE.
+*!
+*! v0.13.0 changelog (vs v0.12.0) -- "properly instrumented endogenous AIE":
+*!   - The interaction of an ENDOGENOUS treatment with a moderator (e.g.
+*!     c.employment_gap#c.eldisadv) can now be declared as a SECOND endogenous
+*!     regressor directly in the varlist, mirroring cfprobit/plausexog:
+*!         apexog uci y X (c.d c.d#c.X = z1 z1#c.X z2 ...), target(c.d#c.X)
+*!     The interaction gets its own first stage + control function (instrumented
+*!     by the user-supplied moderator x instrument interactions), instead of the
+*!     v0.9-v0.12 behaviour of treating d*X as an exogenous control (a mis-
+*!     specification when d is endogenous).
+*!   - New cfinteract option (auto-on for the endogenous-interaction AIE) adds
+*!     the products of the control functions to the main probit, replicating
+*!     cfprobit's cfinteract.  At gamma=0 the AIE now matches the properly
+*!     instrumented 2-endog cfprobit to machine precision (sanity 31/32).
+*!   - Murphy-Topel VCE extended: first-stage uncertainty propagates through the
+*!     control-function product terms too (sanity 33: MT AIE SE within bootstrap
+*!     MC error of the gold standard).  Reduces exactly to the v0.12 VCE when no
+*!     cfinteract products are present (sanity 06/24 byte-identical).
+*!   - Scope: one two-way interaction endog; continuous-by-continuous validated
+*!     to machine precision.  v0.12.0 source preserved in ./legacy/v0.12.0/.
 *!
 *! v0.12.0 changelog (vs v0.11.0):
 *!   - RENAMED: plausexog_ape -> apexog.  Internal helpers _papefit,
@@ -190,6 +231,7 @@ program apexog, eclass
         GRAPHOPTions(string asis)
         AIE(string)
         TARget(string)
+        CFINTeract
     ]
     ;
     #delimit cr
@@ -235,6 +277,14 @@ program apexog, eclass
     local all_endog ""
     local all_iv    ""
     local cfopts_inline ""        // accumulate any inline cfopts for diagnostics
+    * v0.13: metadata for an interaction term declared as an endogenous
+    * regressor (endogenous treatment x moderator).  Empty when none present.
+    local aieendog_tempvar ""
+    local aieendog_X    ""
+    local aieendog_Z    ""
+    local aieendog_Xpfx ""
+    local aieendog_Zpfx ""
+    local aieendog_spec ""
     while `"`1'"' == "(" {
         local ++n_clauses
         macro shift               // skip (
@@ -269,26 +319,75 @@ program apexog, eclass
         if "`endog_`n_clauses''" == "" _apexogerr "Clause `n_clauses' has no endogenous variable(s)."
         if "`iv_`n_clauses''" == ""    _apexogerr "Clause `n_clauses' has no instrument(s)."
 
-        * Phase 1: parse i./c. prefixes on endog vars BEFORE fvexpand.  The
-        * prefix only declares a TYPE (used to default first-stage type).
-        * Strip it so downstream code (which expects bare varnames) is
-        * unchanged; the type is stored in `endog_prefix_<n_clauses>_<j>'.
+        * Phase 1 / v0.13: parse endog tokens BEFORE fvexpand.
+        *   - i./c. prefix on a plain var declares a TYPE (first-stage default).
+        *   - a token containing `#' is a two-way INTERACTION declared as an
+        *     endogenous regressor (the canonical endogenous-treatment x
+        *     moderator case).  We materialise it as a product tempvar so it can
+        *     serve as a regression LHS, and record its operands for AIE wiring.
         local _stripped_endog ""
         local _pos = 0
         foreach _tok of local endog_`n_clauses' {
             local ++_pos
-            local _pfx ""
-            local _bare "`_tok'"
-            if substr("`_tok'", 1, 2) == "i." {
-                local _pfx  "i"
-                local _bare = substr("`_tok'", 3, .)
+            if strpos("`_tok'", "#") {
+                local _opnd : subinstr local _tok "#" " ", all
+                local _nop : word count `_opnd'
+                if `_nop' != 2 {
+                    _apexogerr "Only two-way interaction endogs are supported; got `_tok'."
+                }
+                if "`aieendog_tempvar'" != "" {
+                    _apexogerr "Only one interaction endogenous regressor is supported; got a second: `_tok'."
+                }
+                local _o1 : word 1 of `_opnd'
+                local _o2 : word 2 of `_opnd'
+                local _b1 "`_o1'"
+                local _f1 ""
+                if substr("`_o1'",1,2)=="i." {
+                    local _f1 "i"
+                    local _b1 = substr("`_o1'",3,.)
+                }
+                else if substr("`_o1'",1,2)=="c." {
+                    local _f1 "c"
+                    local _b1 = substr("`_o1'",3,.)
+                }
+                local _b2 "`_o2'"
+                local _f2 ""
+                if substr("`_o2'",1,2)=="i." {
+                    local _f2 "i"
+                    local _b2 = substr("`_o2'",3,.)
+                }
+                else if substr("`_o2'",1,2)=="c." {
+                    local _f2 "c"
+                    local _b2 = substr("`_o2'",3,.)
+                }
+                confirm numeric variable `_b1'
+                confirm numeric variable `_b2'
+                tempvar _ixz
+                qui gen double `_ixz' = `_b1' * `_b2'
+                local aieendog_tempvar "`_ixz'"
+                local aieendog_X    "`_b1'"
+                local aieendog_Z    "`_b2'"
+                local aieendog_Xpfx "`_f1'"
+                local aieendog_Zpfx "`_f2'"
+                local aieendog_spec "`_tok'"
+                * a generated product is a continuous regressor: linear 1st stage
+                local endog_prefix_`n_clauses'_`_pos' "c"
+                local _stripped_endog "`_stripped_endog' `_ixz'"
             }
-            else if substr("`_tok'", 1, 2) == "c." {
-                local _pfx  "c"
-                local _bare = substr("`_tok'", 3, .)
+            else {
+                local _pfx ""
+                local _bare "`_tok'"
+                if substr("`_tok'", 1, 2) == "i." {
+                    local _pfx  "i"
+                    local _bare = substr("`_tok'", 3, .)
+                }
+                else if substr("`_tok'", 1, 2) == "c." {
+                    local _pfx  "c"
+                    local _bare = substr("`_tok'", 3, .)
+                }
+                local endog_prefix_`n_clauses'_`_pos' "`_pfx'"
+                local _stripped_endog "`_stripped_endog' `_bare'"
             }
-            local endog_prefix_`n_clauses'_`_pos' "`_pfx'"
-            local _stripped_endog "`_stripped_endog' `_bare'"
         }
         local endog_`n_clauses' : list clean _stripped_endog
 
@@ -350,10 +449,114 @@ program apexog, eclass
             _apexogerr "Internal: couldn't map endog `endogvar' to a clause."
         }
     }
+
+    *==========================================================================
+    * (1b) v0.13.1: clean instruments to FULL RANK for the Murphy-Topel W.
+    *      fvexpand of factor instruments (e.g. dummy##c.eldisadv) leaves base
+    *      levels (0b.) -- structural zeros -- and bare-vs-factor / moderator
+    *      duplicates that are collinear with the exog controls.  Those degenerate
+    *      columns make the Mata first-stage W rank-deficient (singular M_pi ->
+    *      a non-PSD VCE / missing SE).  We drop them (data-based, _rmcoll against
+    *      the controls) and MATERIALISE each surviving instrument as a plain
+    *      tempvar so no later factor re-expansion can reintroduce a base level.
+    *      `ivlabels' keeps the original term names for display/ereturn.  This is
+    *      a no-op for already-clean continuous instruments.
+    *==========================================================================
+    tempvar _cl_touse
+    qui gen byte `_cl_touse' = 1
+    markout `_cl_touse' `yvar' `varlist1' `varlist2' `varlist_iv' `aieendog_tempvar'
+    * exog controls as plain tempvars (collinearity baseline)
+    local _ctrl_tv ""
+    foreach _c of local varlist1 {
+        fvrevar `_c'
+        local _ctrl_tv `_ctrl_tv' `r(varlist)'
+    }
+    * shared dedup'd pool of clean instruments (tempvar + original-name label)
+    local _ivpool_tv    ""
+    local _ivpool_names ""
+    forvalues j = 1/`count2' {
+        fvexpand `iv_for_endog_`j''
+        local _allexp `r(varlist)'
+        local _cand_names ""
+        local _cand_tv    ""
+        foreach _t of local _allexp {
+            fvrevar `_t'
+            tempvar _cc
+            qui gen double `_cc' = `r(varlist)'
+            local _cand_names `_cand_names' `_t'
+            local _cand_tv    `_cand_tv' `_cc'
+        }
+        _rmcoll `_ctrl_tv' `_cand_tv' if `_cl_touse'
+        local _surv `r(varlist)'
+        local _ivj ""
+        local _ii = 0
+        foreach _tv of local _cand_tv {
+            local ++_ii
+            local _nm : word `_ii' of `_cand_names'
+            local _ok : list _tv in _surv
+            if `_ok' {
+                local _pos : list posof "`_nm'" in _ivpool_names
+                if `_pos' == 0 {
+                    local _ivpool_names `_ivpool_names' `_nm'
+                    local _ivpool_tv    `_ivpool_tv' `_tv'
+                    local _pos : word count `_ivpool_names'
+                }
+                local _ptv : word `_pos' of `_ivpool_tv'
+                local _ivj `_ivj' `_ptv'
+            }
+        }
+        local iv_for_endog_`j' "`_ivj'"
+    }
+    local varlist_iv "`_ivpool_tv'"
+    local ivlabels   "`_ivpool_names'"
+    local count_iv : word count `varlist_iv'
+    if `count_iv' < 1 {
+        _apexogerr "No usable instruments remain after dropping degenerate/collinear terms."
+    }
+
     local countmin : word count `gmin'
     local countmax : word count `gmax'
     local count_mu : word count `mu'
     local count_om : word count `omega'
+
+    * Convenience (v0.13.1): a SINGLE gmin/gmax/mu/omega value is broadcast to all
+    * instruments.  Handy now that the instrument count is the cleaned, full-rank
+    * count (which the user need not pre-compute): `gmin(-0.01) gmax(0.01)' applies
+    * the same assumed range to every instrument.
+    if `count_iv' > 1 {
+        if `countmin' == 1 {
+            local _v `gmin'
+            local gmin ""
+            forvalues k = 1/`count_iv' {
+                local gmin "`gmin' `_v'"
+            }
+            local countmin = `count_iv'
+        }
+        if `countmax' == 1 {
+            local _v `gmax'
+            local gmax ""
+            forvalues k = 1/`count_iv' {
+                local gmax "`gmax' `_v'"
+            }
+            local countmax = `count_iv'
+        }
+        if `count_mu' == 1 {
+            local _v `mu'
+            local mu ""
+            forvalues k = 1/`count_iv' {
+                local mu "`mu' `_v'"
+            }
+            local count_mu = `count_iv'
+        }
+        if `count_om' == 1 {
+            local _v `omega'
+            local omega ""
+            forvalues k = 1/`count_iv' {
+                local omega "`omega' `_v'"
+            }
+            local count_om = `count_iv'
+        }
+    }
 
     *==========================================================================
     * (2) Validate options and v0.2 scope restrictions
@@ -751,7 +954,7 @@ program apexog, eclass
     * (3) Determine the estimation sample
     *==========================================================================
     marksample touse
-    markout `touse' `yvar' `varlist1' `dvar' `varlist_iv'
+    markout `touse' `yvar' `varlist1' `dvar' `varlist_iv' `aieendog_tempvar'
     qui count if `touse'
     local N = r(N)
     if `N' == 0 _apexogerr "No observations remain after if/in and missing-data filtering."
@@ -786,6 +989,7 @@ program apexog, eclass
     *   - target() path: type flags filled from c./i. prefix on each spec;
     *                    a missing prefix falls back to value-based detection
     local aie_active = 0
+    local aie_xz_is_endog = 0
     if "`aie'" != "" | `target_is_aie' {
         if "`aie'" != "" {
             local n_aie : word count `aie'
@@ -846,14 +1050,26 @@ program apexog, eclass
         if `aie_case' == 2 local _aie_case_lbl "binary-by-continuous (firstdiff in `aie_X')"
         if `aie_case' == 3 local _aie_case_lbl "binary-by-binary (2nd discrete difference)"
 
-        * Create the interaction tempvar.  For binary-by-binary this is also the
-        * `1.X#1.Z' indicator (since X,Z in {0,1}, X*Z = 1 iff both = 1).
-        * The first-stage exog list (`exog_for_endog_<j>') is built below and
-        * EXCLUDES this tempvar for any endog that is an interactor.
-        tempvar aie_XZ
-        qui gen double `aie_XZ' = `aie_X' * `aie_Z' if `touse'
-        local varlist1 `varlist1' `aie_XZ'
-        local count1 = `count1' + 1
+        * v0.13: if this interaction was DECLARED as an endogenous regressor in
+        * the varlist (the endogenous-treatment x moderator case), target that
+        * existing endog tempvar and let it carry its own control function.  Do
+        * NOT create a separate exogenous control.  Matching is on the unordered
+        * operand pair.  Otherwise (all-exogenous, or undeclared) fall back to
+        * the original behaviour: materialise the product as an exog control.
+        if "`aieendog_tempvar'" != ""                                          ///
+           & ( ("`aie_X'"=="`aieendog_X'" & "`aie_Z'"=="`aieendog_Z'")         ///
+             | ("`aie_X'"=="`aieendog_Z'" & "`aie_Z'"=="`aieendog_X'") ) {
+            local aie_xz_is_endog = 1
+            local aie_XZ "`aieendog_tempvar'"
+        }
+        else {
+            * Create the interaction tempvar.  For binary-by-binary this is also
+            * the `1.X#1.Z' indicator (since X,Z in {0,1}, X*Z=1 iff both=1).
+            tempvar aie_XZ
+            qui gen double `aie_XZ' = `aie_X' * `aie_Z' if `touse'
+            local varlist1 `varlist1' `aie_XZ'
+            local count1 = `count1' + 1
+        }
         local aie_active = 1
 
         di as text "  [aie] target = `_aie_case_lbl'  (via `aie_source')"
@@ -870,6 +1086,18 @@ program apexog, eclass
         local aie_Z_binary = 0
         local aie_case = 0
     }
+
+    *==========================================================================
+    * cfinteract: include products of the control functions in the main probit
+    * (replicates cfprobit's cfinteract = c.chat1##c.chat2... minus the mains).
+    * Auto-on when the AIE interaction is itself an endogenous regressor (the
+    * canonical endogenous-treatment x moderator model); also honored as an
+    * explicit option for general multi-endog use.  Needs >=2 control functions.
+    *==========================================================================
+    local do_cfinteract = 0
+    if "`cfinteract'" != "" local do_cfinteract = 1
+    if `aie_xz_is_endog'    local do_cfinteract = 1
+    if `count2' < 2         local do_cfinteract = 0
 
     *==========================================================================
     * (4) Run the first stage ONCE (does not depend on gamma).  Save:
@@ -939,6 +1167,30 @@ program apexog, eclass
         }
         local chat0_list `chat0_list' `chat0_`j''
         local A_list     `A_list'     `A_`j''
+    }
+
+    *==========================================================================
+    * (4d) cfinteract product terms: all unique pairwise products of the control
+    *      functions.  For the canonical 2-endog AIE this is the single product
+    *      chat_d * chat_dX.  These enter the main probit AFTER the chat0s (so
+    *      e(b) order is [exog endog chat0 cfprod _cons]).
+    *==========================================================================
+    local cfprod_list ""
+    if `do_cfinteract' {
+        local _nc : word count `chat0_list'
+        local _amax = `_nc' - 1
+        forvalues a = 1/`_amax' {
+            local _ca : word `a' of `chat0_list'
+            local _bmin = `a' + 1
+            forvalues b = `_bmin'/`_nc' {
+                local _cb : word `b' of `chat0_list'
+                tempvar _cfp_`a'_`b'
+                qui gen double `_cfp_`a'_`b'' = `_ca' * `_cb' if `touse'
+                local cfprod_list `cfprod_list' `_cfp_`a'_`b''
+            }
+        }
+        local _ncf : word count `cfprod_list'
+        di as text "  [cfinteract] added `_ncf' control-function product term(s) to the main probit."
     }
 
     * v0.6: all chat0s enter the main probit as regressors.  The MT correction
@@ -1020,7 +1272,7 @@ program apexog, eclass
         offvar(`offvar') aweightlist(`A_list')                              ///
         exoglist(`varlist1') ivlist(`varlist_iv')                           ///
         clustvar(`clustvar') vcetype(`vcetype')                             ///
-        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case')                         ///
+        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list')                         ///
         level(`level') `debug'
     * First-endog scalars (back-compat)
     local baseline_ape = r(ape)
@@ -1093,7 +1345,7 @@ program apexog, eclass
                 offvar(`offvar') aweightlist(`A_list')                          ///
                 exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                 clustvar(`clustvar') vcetype(`vcetype')                         ///
-                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case')                     ///
+                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list')                     ///
                 level(`level') `debug'
             matrix _apexogITER_APE = r(ape_vec)
             matrix _apexogITER_LO  = r(lo_vec)
@@ -1172,7 +1424,7 @@ program apexog, eclass
             di as text " "
             di as text "UCI union over gamma grid (`grid' point(s) per IV):"
             forvalues k = 1/`count_iv' {
-                local zname : word `k' of `varlist_iv'
+                local zname : word `k' of `ivlabels'
                 di as text "    gamma_`zname' range  : [" %7.4f `gmin`k'' ", " %7.4f `gmax`k'' "]"
             }
             di as text " "
@@ -1200,7 +1452,7 @@ program apexog, eclass
             clear
             svmat _apexogGRID, names(col)
             sort g1
-            local zname : word 1 of `varlist_iv'
+            local zname : word 1 of `ivlabels'
             if `aie_active' {
                 local _ape_lab "ape_`aie_X'_`aie_Z'"
                 local _lo_lab  "lo_`aie_X'_`aie_Z'"
@@ -1283,7 +1535,7 @@ program apexog, eclass
         ereturn local depvar         "`yvar'"
         ereturn local endog          "`varlist2'"
         ereturn local exog           "`varlist1'"
-        ereturn local instruments    "`varlist_iv'"
+        ereturn local instruments    "`ivlabels'"
     }
 
     *==========================================================================
@@ -1337,7 +1589,7 @@ program apexog, eclass
                 offvar(`offvar') aweightlist(`A_list')                          ///
                 exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                 clustvar(`clustvar') vcetype(`vcetype')                         ///
-                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case')                     ///
+                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list')                     ///
                 level(`level') `debug'
 
             matrix _apexogITER_APE = r(ape_vec)
@@ -1403,7 +1655,7 @@ program apexog, eclass
             di as text " "
             di as text "LTZ prior:"
             forvalues k = 1/`count_iv' {
-                local zname : word `k' of `varlist_iv'
+                local zname : word `k' of `ivlabels'
                 if "`ltz_mode'" == "gaussian" {
                     di as text "    gamma_`zname' ~ N(" %7.4f `mu`k'' ", " %7.4f `omega`k'' ")"
                 }
@@ -1523,7 +1775,7 @@ program apexog, eclass
         ereturn local depvar         "`yvar'"
         ereturn local endog          "`varlist2'"
         ereturn local exog           "`varlist1'"
-        ereturn local instruments    "`varlist_iv'"
+        ereturn local instruments    "`ivlabels'"
     }
 end
 
@@ -1543,7 +1795,7 @@ program _apexogfit, rclass
         vcetype(string)                                                     ///
         level(real)                                                         ///
         [clustvar(string) aiex(string) aiez(string) aiexz(string)           ///
-         aiecase(integer 0) debug]
+         aiecase(integer 0) cfprodlist(string) debug]
 
     if "`debug'" != "" {
         qui sum `offvar' if `touse'
@@ -1558,11 +1810,11 @@ program _apexogfit, rclass
     * Run probit with the offset.  Use `capture noisily quietly' pattern.
     capture {
         if "`debug'" != "" {
-            probit `yvar' `exoglist' `endoglist' `chat0list' if `touse',    ///
+            probit `yvar' `exoglist' `endoglist' `chat0list' `cfprodlist' if `touse', ///
                 offset(`offvar') `_vce'
         }
         else {
-            quietly probit `yvar' `exoglist' `endoglist' `chat0list' if `touse', ///
+            quietly probit `yvar' `exoglist' `endoglist' `chat0list' `cfprodlist' if `touse', ///
                 offset(`offvar') `_vce'
         }
     }
@@ -1602,6 +1854,7 @@ program _apexogfit, rclass
                             "`aweightlist'", "`clustvar'",                  ///
                             "`exoglist'", "`ivlist'",                       ///
                             "`aiex'", "`aiez'", "`aiexz'", `aiecase',       ///
+                            "`cfprodlist'",                                 ///
                             "_apexogAPE_vec", "_apexogSE_vec",                  ///
                             "_apexogLO_vec",  "_apexogHI_vec", `level')
     if _rc != 0 {
@@ -1736,12 +1989,13 @@ void _apexogfit_apese_mt(string scalar yvar,
                        string scalar exognames,    string scalar ivnames,
                        string scalar aiex_name,    string scalar aiez_name,
                        string scalar aiexz_name,   real scalar   aie_case,
+                       string scalar cfprodnames,
                        string scalar mname_ape,    string scalar mname_se,
                        string scalar mname_lo,     string scalar mname_hi,
                        real scalar   level)
 {
-    string rowvector evars, zvars, endogs, chats, Avars
-    real matrix      X_exog, Z_iv, D, CHAT, AA, x_main, W
+    string rowvector evars, zvars, endogs, chats, Avars, cfprods
+    real matrix      X_exog, Z_iv, D, CHAT, AA, CFPROD, x_main, W
     real matrix      H_b, U_2, V_beta_MT, meat, s_2, s_total
     real matrix      M_pi_k, psi_pi_k, A1_k, J2pi_k
     real matrix      S_clust, cluster_ids, info
@@ -1749,8 +2003,10 @@ void _apexogfit_apese_mt(string scalar yvar,
     real colvector   y, offset_vals, A_k, chat_k, eta, phi_eta, Phi_eta, Phim_eta
     real colvector   psi, psi_eta_psi, w_dchat_k, A2_k, ones_col, mean_term
     real colvector   eta_1, eta_0, Phi_1, Phi_0, phi_1, phi_0, diff_phi
+    real colvector   g_k, cf_a, cf_b
     real rowvector   b_pr, J_beta
-    real scalar      n_exog, n_iv, n_endog, n_obs, nx, nw, j, k, ci
+    real scalar      n_exog, n_iv, n_endog, n_obs, nx, nw, j, k, ci, n_cf
+    real scalar      cf_start_idx, cc, aa, bb, m_partner, cf_col_k
     real scalar      d_start_idx, chat_start_idx, cons_idx
     real scalar      d_target_idx, chat_target_idx
     real scalar      b_chat_k, b_d_target
@@ -1783,11 +2039,18 @@ void _apexogfit_apese_mt(string scalar yvar,
     n_obs    = rows(y)
     ones_col = J(n_obs, 1, 1)
 
-    // x_main column order MUST match Stata's
-    //   probit y EXOG d_1 ... d_J chat0_1 ... chat0_J
-    // e(b) order: [X_1..X_p, d_1..d_J, chat0_1..chat0_J, _cons]
-    if (n_exog > 0) x_main = (X_exog, D, CHAT, ones_col)
-    else            x_main = (D, CHAT, ones_col)
+    // cfinteract product columns (chat_i * chat_j), if any
+    cfprods = (cfprodnames == "") ? J(1, 0, "") : tokens(cfprodnames)
+    n_cf    = cols(cfprods)
+    if (n_cf > 0) st_view(CFPROD, ., cfprods, touse)
+
+    // x_main column order MUST match Stata's probit:
+    //   y EXOG d_1..d_J chat0_1..chat0_J [cfprod_1..cfprod_C] _cons
+    // e(b) order: [X_1..X_p, d_1..d_J, chat0_1..chat0_J, cfprod_1..C, _cons]
+    if (n_exog > 0) x_main = (X_exog, D, CHAT)
+    else            x_main = (D, CHAT)
+    if (n_cf > 0)   x_main = (x_main, CFPROD)
+    x_main = (x_main, ones_col)
     nx = cols(x_main)
 
     // Global first-stage regressor matrix (union of all IVs across clauses
@@ -1814,9 +2077,28 @@ void _apexogfit_apese_mt(string scalar yvar,
     // Column indices into x_main
     d_start_idx     = n_exog + 1
     chat_start_idx  = n_exog + n_endog + 1
+    cf_start_idx    = chat_start_idx + n_endog       // first cfprod column (if any)
     cons_idx        = nx
     d_target_idx    = d_start_idx                   // first endog = the target
     chat_target_idx = chat_start_idx                // its CF column
+
+    // Map each cfinteract product column c -> the endog pair (a,b) it multiplies.
+    // The wrapper builds ALL unique pairwise products of the control functions in
+    // lexicographic order, so column c of CFPROD = chat_{cf_a[c]} * chat_{cf_b[c]}.
+    cf_a = J(n_cf, 1, .)
+    cf_b = J(n_cf, 1, .)
+    if (n_cf > 0) {
+        cc = 0
+        for (aa = 1; aa <= n_endog - 1; aa++) {
+            for (bb = aa + 1; bb <= n_endog; bb++) {
+                cc++
+                if (cc <= n_cf) {
+                    cf_a[cc] = aa
+                    cf_b[cc] = bb
+                }
+            }
+        }
+    }
 
     // ---------- pull probit coefficients ----------
     b_pr = st_matrix("_apexogPR_B")
@@ -1877,10 +2159,37 @@ void _apexogfit_apese_mt(string scalar yvar,
         M_pi_k   = invsym(cross(W_k, A_k, W_k))
         psi_pi_k = (W_k :* chat_k) * M_pi_k'        // N x nw_k
 
-        A1_k = cross(x_main, psi_eta_psi :* w_dchat_k, W_k)   // nx x nw_k
-        A2_k = cross(W_k,      psi          :* w_dchat_k)      // nw_k x 1
-        J2pi_k = -b_chat_k :* A1_k
+        // g_k = d(eta)/d(linear-pred-k) coefficient.  Normally just b_chat_k.
+        // With cfinteract, every product chat_k*chat_m also depends on pi_k
+        // (through chat_k), so eta gains b_cf*chat_m*d(chat_k); hence
+        // g_k,i = b_chat_k + sum_{products p with k} b_cf_p * chat_m,i.
+        // Reduces to the scalar b_chat_k when n_cf == 0 (backward compatible).
+        g_k = J(n_obs, 1, b_chat_k)
+        for (cc = 1; cc <= n_cf; cc++) {
+            m_partner = .
+            if      (cf_a[cc] == k) m_partner = cf_b[cc]
+            else if (cf_b[cc] == k) m_partner = cf_a[cc]
+            if (m_partner != .) {
+                cf_col_k = cf_start_idx + cc - 1
+                g_k = g_k + b_pr[cf_col_k] :* CHAT[., m_partner]
+            }
+        }
+
+        A1_k = cross(x_main, psi_eta_psi :* g_k :* w_dchat_k, W_k)   // nx x nw_k
+        A2_k = cross(W_k,      psi          :* w_dchat_k)            // nw_k x 1
+        J2pi_k = -A1_k
         J2pi_k[chat_start_idx + k - 1, .] = J2pi_k[chat_start_idx + k - 1, .] + A2_k'
+        // d(cfprod_c)/d(pi_k) = chat_m * d(chat_k)/d(pi_k) adds an A2-type row at
+        // each product column the endog k participates in.
+        for (cc = 1; cc <= n_cf; cc++) {
+            m_partner = .
+            if      (cf_a[cc] == k) m_partner = cf_b[cc]
+            else if (cf_b[cc] == k) m_partner = cf_a[cc]
+            if (m_partner != .) {
+                cf_col_k = cf_start_idx + cc - 1
+                J2pi_k[cf_col_k, .] = J2pi_k[cf_col_k, .] + cross(W_k, psi :* CHAT[., m_partner] :* w_dchat_k)'
+            }
+        }
 
         s_total = s_total + psi_pi_k * J2pi_k'       // N x nx (product)
     }
@@ -1918,12 +2227,14 @@ void _apexogfit_apese_mt(string scalar yvar,
         // order = [evars, endogs, chats, _cons], so:
         //   exog var at evars position k -> x_main column k
         //   endog var at endogs position k -> x_main column n_exog + k
-        // The XZ tempvar is always in evars (added by wrapper).
-        real scalar X_xmcol, Z_xmcol, XZ_idx, k_search
+        // The XZ tempvar is in evars when the interaction is an exogenous
+        // control (aie() all-exog case) OR in endogs when it was declared as an
+        // endogenous regressor (the endogenous-treatment x moderator case).
+        real scalar X_xmcol, Z_xmcol, XZ_idx, XZ_endogk, k_search
         real colvector X_val, Z_val, XZ_val
         real rowvector J_beta_aie
         real scalar b_X_coef, b_Z_coef, b_XZ_coef, AIE_pt, se_aie, se_sq_aie
-        X_xmcol = .; Z_xmcol = .; XZ_idx = .
+        X_xmcol = .; Z_xmcol = .; XZ_idx = .; XZ_endogk = .
         X_val   = J(n_obs, 1, .)
         Z_val   = J(n_obs, 1, .)
         for (k_search = 1; k_search <= n_exog; k_search++) {
@@ -1946,11 +2257,16 @@ void _apexogfit_apese_mt(string scalar yvar,
                 Z_xmcol = n_exog + k_search
                 Z_val   = D[., k_search]
             }
+            if (endogs[k_search] == aiexz_name) {
+                XZ_idx    = n_exog + k_search
+                XZ_endogk = k_search
+            }
         }
         if (X_xmcol == . | Z_xmcol == . | XZ_idx == .) {
             _error("_apexogfit_apese_mt: aie() variables not found in exog/endog list.")
         }
-        XZ_val    = X_exog[., XZ_idx]
+        if (XZ_endogk != .) XZ_val = D[., XZ_endogk]
+        else                XZ_val = X_exog[., XZ_idx]
         b_X_coef  = b_pr[X_xmcol]
         b_Z_coef  = b_pr[Z_xmcol]
         b_XZ_coef = b_pr[XZ_idx]

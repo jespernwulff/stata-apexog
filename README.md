@@ -58,6 +58,14 @@ The `i.` / `c.` prefixes drive both the first-stage default (`(i.d=...)` → `fi
 - `target(c.X#i.d)` — cts × binary (firstdiff in the binary)
 - `target(i.X#i.d)` — binary × binary (2nd discrete difference)
 
+When the **interaction itself is endogenous** — the canonical case of an endogenous treatment `d` interacted with a moderator `X`, so `d#X` is endogenous too — declare the interaction as a *second endogenous regressor* and instrument it (typically with the base instruments and their moderator interactions), exactly as in `cfprobit` / `plausexog`. The control-function product (`cfinteract`) is added automatically, and the AIE is reported on the probability scale:
+
+```stata
+apexog uci y X (c.d c.d#c.X = Zinst c.Zinst#c.X), target(c.d#c.X) gmin(-0.3) gmax(0.3) grid(11)
+```
+
+Factor-variable instruments (e.g. `dummy##c.eldisadv`) are supported: they are expanded and cleaned to full rank (base levels, the moderator main effect, and bare-vs-factor duplicates are dropped) so the Murphy-Topel variance is well-defined. A single `gmin`/`gmax`/`mu`/`omega` value is broadcast to all instruments.
+
 ---
 
 ## Features
@@ -69,6 +77,8 @@ The `i.` / `c.` prefixes drive both the first-stage default (`(i.d=...)` → `fi
   - `target(d)`, `target(c.d)` — APE for that endog
   - `target(d1 d2)` — APE for both
   - `target(c.X#i.d)` — AIE for the interaction (prefixes drive the formula)
+- **Endogenous-interaction AIE**: declare an endogenous treatment × moderator interaction as a second instrumented endogenous regressor — `(c.d c.d#c.X = ...)` with `target(c.d#c.X)` — with the control-function product (`cfinteract`) added automatically. Matches `cfprobit` + `ginteff` to machine precision.
+- **Factor-variable instruments** are expanded and cleaned to full rank (base/collinear terms dropped); a single `gmin`/`gmax`/`mu`/`omega` value broadcasts to all instruments.
 - **Auto-detection** of binary endogenous regressors → discrete-change APE.
 - **LTZ priors**: Gaussian via `mu()` + `omega()`, or non-Gaussian via `distribution(normal | uniform | chi2 | t | gamma | poisson | special)`.
 - **Inference**: Murphy-Topel two-step sandwich; `vce(robust)` (default), `vce(cluster <id>)`.
