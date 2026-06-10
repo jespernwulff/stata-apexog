@@ -105,9 +105,18 @@ conservative interval: it provides correct coverage as long as the true
 gamma lies somewhere in {cmd:[gmin, gmax]}.
 
 {phang}
-{cmd:ltz} -- Local-to-Zero.  Draws gamma_i from a Gaussian prior
-N({cmd:mu}, {cmd:omega}) and recomputes the APE for each draw.  Reports
-the percentile interval of the simulated APE distribution.
+{cmd:ltz} -- Local-to-Zero.  Draws gamma_i from the prior (Gaussian
+N({cmd:mu}, {cmd:omega}) or {opt distribution()}), recomputes the APE and its
+Murphy-Topel SE for each draw, and convolves each point APE with its sampling
+noise: APE*_i = APE_i + SE_i * eps_i, eps_i ~ N(0,1).  The reported interval
+is the percentile interval of the CONVOLVED draws -- the simulation
+implementation of CHR (2012) eq. (7), where the estimator's sampling
+distribution and the exogeneity-error term A*gamma are independent and must
+be added (in the linear model this is the familiar V + A*Omega*A' interval
+reported by {help plausexog}).  As omega -> 0 the LTZ interval converges to
+the baseline gamma = 0 confidence interval, never below it.  The prior-only
+spread of the point APEs (no sampling noise) is also displayed, as a
+sensitivity band, and returned in {cmd:e(lo_prior_vec)}/{cmd:e(hi_prior_vec)}.
 
 {pstd}
 Standard errors use the Murphy-Topel two-step sandwich (Murphy & Topel
@@ -220,8 +229,9 @@ before drawing the gamma samples.  Use this for reproducibility.
 {dlgtab:Inference}
 
 {phang}
-{opt level(#)} {hline 2} confidence level (uci) or credible level (ltz).
-Must be in (0, 1).  Default 0.95.
+{opt level(#)} {hline 2} confidence level (both methods; for {cmd:ltz} it is
+the percentile level of the convolved draws).  Must be in (0, 1).
+Default 0.95.
 
 {phang}
 {opt vce(vcetype)} {hline 2} variance-covariance estimator:
@@ -302,7 +312,7 @@ when d is endogenous.  Prefer the explicit two-endog form above.{p_end}
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}sample size{p_end}
-{synopt:{cmd:e(level)}}confidence/credible level{p_end}
+{synopt:{cmd:e(level)}}confidence level{p_end}
 {synopt:{cmd:e(baseline_ape)}}APE (or AIE if {opt aie()}) at gamma = 0{p_end}
 {synopt:{cmd:e(baseline_se)}}MT-corrected SE at gamma = 0{p_end}
 {synopt:{cmd:e(lb_}{it:endog}{cmd:)}}lower bound of the APE interval (per endog){p_end}
@@ -341,8 +351,12 @@ For {cmd:method = ltz}, also:
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(iterations)}}number of simulation draws{p_end}
 
-{p2col 5 20 24 2: Matrices}{p_end}
-{synopt:{cmd:e(ape_sim)}}{cmd:iterations x 1} vector of simulated APE draws{p_end}
+{p2col 5 20 24 2: Matrices (J = number of targets)}{p_end}
+{synopt:{cmd:e(ape_sim)}}{cmd:iterations x J} per-draw point APEs/AIEs (prior only){p_end}
+{synopt:{cmd:e(se_sim)}}{cmd:iterations x J} per-draw Murphy-Topel SEs{p_end}
+{synopt:{cmd:e(ape_sim_cnv)}}{cmd:iterations x J} convolved draws APE_i + SE_i*eps_i (basis of the headline CI){p_end}
+{synopt:{cmd:e(lo_pct_vec)} / {cmd:e(hi_pct_vec)}}{cmd:J x 1} convolved percentile bounds (= {cmd:e(lb_*)}/{cmd:e(ub_*)}){p_end}
+{synopt:{cmd:e(lo_prior_vec)} / {cmd:e(hi_prior_vec)}}{cmd:J x 1} prior-only percentile bounds (sensitivity band){p_end}
 
 
 {marker methods}{...}
@@ -398,6 +412,30 @@ For cluster-robust SEs, the meat is replaced by the sum of OUTER products
 of cluster-summed scores:
 
 {p 8 8 2}meat_cluster = sum_c (sum_{i in c} s_total_i) (sum_{i in c} s_total_i)'{p_end}
+
+{pstd}
+{ul:LTZ interval construction.}  CHR (2012) eq. (7) approximates the
+estimator's distribution as the INDEPENDENT sum of its sampling distribution
+and the exogeneity-error term: betahat ~ N(beta, V) + A*gamma, gamma ~ F.
+{cmd:apexog} implements the simulation form of this on the APE/AIE scale:
+each draw refits the probit at gamma_i (giving the bias-adjusted point
+estimate APE_i, the nonlinear analog of betahat - A*gamma_i, with
+Murphy-Topel SE_i), and the sampling-noise term is then convolved in:
+
+{p 8 8 2}APE*_i = APE_i + SE_i * eps_i,   eps_i ~ N(0,1) independent of gamma_i{p_end}
+
+{pstd}
+The reported {opt level(#)} interval is the percentile interval of
+{c -(}APE*_i{c )-}.  Because the noise term is symmetric, this equals CHR's
+pivot construction [APE_0 - c_(1-a/2), APE_0 - c_(a/2)] with c_p the
+percentiles of the simulated deviation distribution, and in the linear model
+it reproduces {help plausexog}'s analytic V + A*Omega*A' interval (validated
+in {it:./_sanity/37_ltz_convolution.do}).  The prior-only percentile spread of
+the point APEs {c -(}APE_i{c )-} is reported separately as a sensitivity band;
+it answers "how does the bias-adjusted estimate move as gamma varies over the
+prior", not "what is a confidence interval for the APE".  For multiple
+targets the eps draws are independent across targets, which is exact for the
+per-target marginal intervals reported.
 
 {pstd}
 {ul:Average Interaction Effect (with {opt aie(X Z)})}.  Three cases

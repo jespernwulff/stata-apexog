@@ -16,6 +16,17 @@ d   Inference uses a Murphy-Topel two-step sandwich computed in
 d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
 d   margins, dydx() to machine precision.
 d
+d   Features (v0.14.0):
+d     - LTZ interval now CONVOLVES sampling noise with the gamma prior
+d       (CHR 2012 eq. 7; the simulation analog of plausexog's
+d       V + A*Omega*A').  The prior-only spread of point APEs is
+d       still reported as a labeled sensitivity band.
+d
+d   Features (v0.13.x):
+d     - endog-interaction AIE: (c.d c.d#c.X = Z c.Z#c.X) with
+d       target(c.d#c.X) and auto cfinteract
+d     - factor-variable instruments cleaned to full rank
+d
 d   Features (v0.12.0):
 d     - RENAMED from plausexog_ape to apexog (no behavioral change)
 d
@@ -50,7 +61,7 @@ d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhu
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d License: MIT (https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE)
 d
-d Distribution-Date: 20260527
+d Distribution-Date: 20260610
 d
 f apexog.ado
 f apexog.sthlp

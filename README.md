@@ -70,7 +70,7 @@ Factor-variable instruments (e.g. `dummy##c.eldisadv`) are supported: they are e
 
 ## Features
 
-- **Methods**: `uci` (Union of Confidence Intervals over a γ grid) and `ltz` (Local-to-Zero Monte Carlo).
+- **Methods**: `uci` (Union of Confidence Intervals over a γ grid) and `ltz` (Local-to-Zero Monte Carlo). The LTZ interval convolves the estimator's sampling noise with the γ prior per draw (`APE*_i = APE_i + SE_i·ε_i` — the simulation analog of `plausexog`'s analytic `V + AΩA′`, CHR 2012 eq. 7); the prior-only spread of the point APEs is also reported, as a sensitivity band (v0.14.0).
 - **First stages**: `linear`, `probit`, `fprobit`, `poisson` — one per endogenous regressor, or one shared.
 - **Multiple endogenous regressors** with per-endog instrument sets (multi-clause syntax `(d1 = Z1 Z2)(d2 = Z2 Z3)`).
 - **Target selection** via `target()`:
@@ -82,7 +82,7 @@ Factor-variable instruments (e.g. `dummy##c.eldisadv`) are supported: they are e
 - **Auto-detection** of binary endogenous regressors → discrete-change APE.
 - **LTZ priors**: Gaussian via `mu()` + `omega()`, or non-Gaussian via `distribution(normal | uniform | chi2 | t | gamma | poisson | special)`.
 - **Inference**: Murphy-Topel two-step sandwich; `vce(robust)` (default), `vce(cluster <id>)`.
-- **Graphing**: line plot of APE vs γ (`uci`) or histogram of simulated APEs (`ltz`).
+- **Graphing**: line plot of APE vs γ (`uci`) or histogram of the convolved LTZ draws (`ltz`).
 
 ---
 

@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.13.2  2026-06-07
+*! Version 0.14.0  2026-06-10
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,34 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.14.0 changelog (vs v0.13.2) -- LTZ interval now convolves sampling noise:
+*!   - Pre-0.14, the LTZ percentile interval was taken over the per-draw POINT
+*!     APEs only: a sensitivity distribution (prior-induced spread of the
+*!     bias-adjusted point estimates), NOT the CHR (2012) eq. (7) confidence
+*!     interval, which convolves sampling noise with the gamma prior
+*!     (betahat ~ N(beta, V) + A*gamma, terms independent; plausexog implements
+*!     this as V + A*Omega*A' analytically and as per-draw N(0,V)+A*gamma in
+*!     its simulated path).  Symptom: a tight prior produced an LTZ interval
+*!     NARROWER than the baseline gamma=0 CI -- impossible for a genuine LTZ
+*!     CI -- and LTZ was internally inconsistent with UCI (whose grid points
+*!     already contribute APE +/- z*SE_MT).  Demonstrated and validated in
+*!     _sanity/37_ltz_convolution.do: the convolved recipe reproduces
+*!     plausexog's analytic V + A*Omega*A' interval in the linear oracle
+*!     (width ratio 0.995); the raw recipe gives 1/sqrt(2) of it when prior
+*!     spread ~ sampling SE.
+*!   - Fix: the LTZ loop now ALSO stores the per-draw Murphy-Topel SE
+*!     (r(se_vec), previously discarded), and _apexogsim_pct convolves
+*!     APE*_i = APE_i + SE_i*eps_i, eps_i ~ N(0,1), AFTER the loop (so the
+*!     gamma-draw sequence under seed() is byte-identical to v0.13.2).  The
+*!     headline e(lb_*)/e(ub_*) percentile interval is now taken over the
+*!     CONVOLVED draws; the prior-only spread of point APEs is still shown as
+*!     a labeled sensitivity band and returned in e(lo_prior_vec)/
+*!     e(hi_prior_vec).  New ereturns: e(se_sim) (per-draw MT SEs),
+*!     e(ape_sim_cnv) (convolved draws), e(lo_prior_vec), e(hi_prior_vec).
+*!     The LTZ histogram now plots the convolved draws.  Applies identically
+*!     to Gaussian and distribution() priors, APE and AIE targets, and all
+*!     first-stage types.  UCI is untouched.
 *!
 *! v0.13.2 changelog (vs v0.13.1) -- cosmetic, no numeric change:
 *!   - The instrument-cleaning step (v0.13.1) ran _rmcoll noisily, spilling
@@ -1566,6 +1594,7 @@ program apexog, eclass
         else            local n_targets = `count2'
 
         matrix _apexogAPESIM = J(`iterations', `n_targets', .)
+        matrix _apexogSESIM  = J(`iterations', `n_targets', .)
         local sim_colnames ""
         if `aie_active' {
             local sim_colnames "aie_`aie_X'_`aie_Z'"
@@ -1576,6 +1605,7 @@ program apexog, eclass
             }
         }
         matrix colnames _apexogAPESIM = `sim_colnames'
+        matrix colnames _apexogSESIM  = `sim_colnames'
 
         * Build the donor matrix for distribution(special) now that touse exists.
         if "`special_pending'" == "1" {
@@ -1609,8 +1639,10 @@ program apexog, eclass
                 level(`level') `debug'
 
             matrix _apexogITER_APE = r(ape_vec)
+            matrix _apexogITER_SE  = r(se_vec)
             forvalues j = 1/`n_targets' {
                 matrix _apexogAPESIM[`iter', `j'] = _apexogITER_APE[`j', 1]
+                matrix _apexogSESIM[`iter', `j']  = _apexogITER_SE[`j', 1]
             }
 
             if mod(`iter', 100) == 0 {
@@ -1618,12 +1650,13 @@ program apexog, eclass
             }
         }
 
-        mata: st_local("_n_missing", strofreal(sum(rowmissing(st_matrix("_apexogAPESIM")))))
+        mata: st_local("_n_missing", strofreal(sum(rowmissing(st_matrix("_apexogAPESIM")) :| rowmissing(st_matrix("_apexogSESIM")))))
         if `_n_missing' > 0 {
-            di as text "  [note] `_n_missing' of `iterations' LTZ draws failed (probit did not converge); excluded from percentile interval."
+            di as text "  [note] `_n_missing' of `iterations' LTZ draws failed (probit did not converge or MT SE missing); excluded from percentile interval."
         }
 
         mata: _apexogsim_pct(`level')
+        matrix colnames _apexogSIMCNV = `sim_colnames'
 
         if "`header'" == "" {
             di as text _newline "{hline 78}"
@@ -1683,20 +1716,35 @@ program apexog, eclass
             di as text " "
             local lvl = `level' * 100
             if `aie_active' {
-                di as text "AIE distribution across draws (percentile intervals):"
+                di as text "LTZ `lvl'% interval (sampling noise convolved with prior; CHR 2012 eq. 7):"
                 scalar _apexogLO = _apexogLO_PCT[1, 1]
                 scalar _apexogHI = _apexogHI_PCT[1, 1]
-                di as text "    AIE(`aie_X' ## `aie_Z') `lvl'% interval = [" %9.6f _apexogLO ", " %9.6f _apexogHI "]"
+                di as text "    AIE(`aie_X' ## `aie_Z') `lvl'% CI = [" %9.6f _apexogLO ", " %9.6f _apexogHI "]"
+                di as text " "
+                di as text "Prior-only spread of the point AIEs (sensitivity band, no sampling noise):"
+                scalar _apexogLO = _apexogLO_PRIOR[1, 1]
+                scalar _apexogHI = _apexogHI_PRIOR[1, 1]
+                di as text "    AIE(`aie_X' ## `aie_Z') `lvl'% range = [" %9.6f _apexogLO ", " %9.6f _apexogHI "]"
             }
             else {
-                di as text "APE distribution across draws (percentile intervals):"
+                di as text "LTZ `lvl'% intervals (sampling noise convolved with prior; CHR 2012 eq. 7):"
                 local j = 0
                 foreach endogvar of local varlist2 {
                     local ++j
                     if !`target_endog_`j'' continue
                     scalar _apexogLO = _apexogLO_PCT[`j', 1]
                     scalar _apexogHI = _apexogHI_PCT[`j', 1]
-                    di as text "    APE(`endogvar') `lvl'% interval = [" %9.6f _apexogLO ", " %9.6f _apexogHI "]"
+                    di as text "    APE(`endogvar') `lvl'% CI = [" %9.6f _apexogLO ", " %9.6f _apexogHI "]"
+                }
+                di as text " "
+                di as text "Prior-only spread of the point APEs (sensitivity band, no sampling noise):"
+                local j = 0
+                foreach endogvar of local varlist2 {
+                    local ++j
+                    if !`target_endog_`j'' continue
+                    scalar _apexogLO = _apexogLO_PRIOR[`j', 1]
+                    scalar _apexogHI = _apexogHI_PRIOR[`j', 1]
+                    di as text "    APE(`endogvar') `lvl'% range = [" %9.6f _apexogLO ", " %9.6f _apexogHI "]"
                 }
             }
             di as text "{hline 78}"
@@ -1708,12 +1756,13 @@ program apexog, eclass
         ereturn scalar iterations    = `iterations'
         ereturn scalar baseline_ape  = `baseline_ape'
         ereturn scalar baseline_se   = `baseline_se'
-        *--- Optional graph: histogram of the LTZ APE/AIE simulation draws ----
+        *--- Optional graph: histogram of the CONVOLVED LTZ simulation draws --
+        * (APE_i + SE_i*eps_i -- the draws behind the headline CI).
         * For multi-endog APE, plot the FIRST endog's distribution only.
         if "`graph'" != "" {
             preserve
             clear
-            svmat _apexogAPESIM, names(col)
+            svmat _apexogSIMCNV, names(col)
             if `aie_active' {
                 local _histvar "aie_`aie_X'_`aie_Z'"
                 local _title   "LTZ AIE distribution across `iterations' draws"
@@ -1733,7 +1782,8 @@ program apexog, eclass
                     subtitle("`_subt'")                                    ///
                     xtitle("`_xt'")                                         ///
                     ytitle("Density")                                       ///
-                    note("Dashed lines: `=`level'*100'% percentile bounds; solid: baseline (gamma=0)")
+                    note("Draws convolve sampling noise with the prior (CHR 2012 eq. 7)." ///
+                         "Dashed lines: `=`level'*100'% percentile bounds; solid: baseline (gamma=0)")
             }
             twoway (histogram `_histvar', frequency)                   ///
                    ,                                                   ///
@@ -1770,8 +1820,12 @@ program apexog, eclass
             }
         }
         ereturn matrix ape_sim       = _apexogAPESIM
+        ereturn matrix se_sim        = _apexogSESIM
+        ereturn matrix ape_sim_cnv   = _apexogSIMCNV
         ereturn matrix lo_pct_vec    = _apexogLO_PCT
         ereturn matrix hi_pct_vec    = _apexogHI_PCT
+        ereturn matrix lo_prior_vec  = _apexogLO_PRIOR
+        ereturn matrix hi_prior_vec  = _apexogHI_PRIOR
         ereturn matrix baseline_ape_vec = _apexogBASE_APE
         ereturn matrix baseline_se_vec  = _apexogBASE_SE
         if `aie_active' {
@@ -1918,36 +1972,77 @@ end
 mata:
 
 // ----------------------------------------------------------------------------
-// _apexogsim_pct: per-endog percentile intervals for the LTZ ape simulation
-// matrix.  _apexogAPESIM is N_iter x J (one column per endog).  Writes per-endog
-// percentiles into Stata matrices _apexogLO_PCT (J x 1) and _apexogHI_PCT (J x 1).
-// Also writes the FIRST endog's percentiles into locals lo_pct / hi_pct for
-// back-compat with the single-endog display.
+// _apexogsim_pct: per-target percentile intervals for the LTZ simulation.
+// _apexogAPESIM (N_iter x J) holds the per-draw POINT APEs/AIEs; _apexogSESIM
+// (N_iter x J) the per-draw Murphy-Topel SEs.
+//
+// The HEADLINE interval is the CHR (2012) eq. (7) LTZ confidence interval:
+// sampling noise convolved with the gamma prior.  Each refit at gamma_i gives
+// the bias-adjusted point estimate (the nonlinear analog of betahat - A*gamma_i),
+// so convolving per draw
+//        APE*_i = APE_i + SE_i * eps_i ,   eps_i ~ N(0,1)
+// and taking percentiles of {APE*_i} reproduces CHR's pivot interval
+// [APE0 - c_{1-a/2}(eta), APE0 - c_{a/2}(eta)] exactly (symmetric noise), and
+// reproduces plausexog's analytic V + A*Omega*A' interval in the linear model
+// (validated in _sanity/37_ltz_convolution.do).
+//
+// The eps draws happen HERE, after the gamma loop, so the gamma-draw sequence
+// under seed() is identical to pre-0.14 versions.  A full N_iter x J eps
+// matrix is drawn regardless of failed (missing) draws, so the RNG state
+// consumed is reproducible.  For J > 1 the eps draws are independent across
+// targets: exact for the per-target MARGINAL intervals reported (joint
+// inference across targets would need the cross-APE covariance, not returned).
+//
+// Writes:
+//   _apexogLO_PCT  / _apexogHI_PCT   (J x 1)  convolved percentiles (headline)
+//   _apexogLO_PRIOR/ _apexogHI_PRIOR (J x 1)  prior-only point-APE percentiles
+//   _apexogSIMCNV  (N_iter x J)               the convolved draws
+//   locals lo_pct / hi_pct                    first target, convolved
 // ----------------------------------------------------------------------------
 void _apexogsim_pct(real scalar level)
 {
-    real matrix      S, S_clean
-    real colvector   col_clean, lo_vec, hi_vec
+    real matrix      S, SE, C
+    real colvector   col_clean, lo_vec, hi_vec, lo_raw, hi_raw
     real scalar      n_iter, J, j, n_valid, lo_pos, hi_pos, alpha
     S      = st_matrix("_apexogAPESIM")
+    SE     = st_matrix("_apexogSESIM")
     n_iter = rows(S)
     J      = cols(S)
     alpha  = 1 - level
+    // convolve: missing APE_i or SE_i propagates to a missing convolved draw
+    C      = S + SE :* rnormal(n_iter, J, 0, 1)
     lo_vec = J(J, 1, .)
     hi_vec = J(J, 1, .)
+    lo_raw = J(J, 1, .)
+    hi_raw = J(J, 1, .)
     for (j = 1; j <= J; j++) {
+        // headline: convolved draws
+        col_clean = select(C[., j], !missing(C[., j]))
+        n_valid   = rows(col_clean)
+        if (n_valid > 0) {
+            col_clean = sort(col_clean, 1)
+            lo_pos    = max((1, round(alpha/2 * n_valid)))
+            hi_pos    = min((n_valid, round((1 - alpha/2) * n_valid)))
+            lo_vec[j] = col_clean[lo_pos]
+            hi_vec[j] = col_clean[hi_pos]
+        }
+        // secondary: prior-only spread of the point APEs (pre-0.14 headline)
         col_clean = select(S[., j], !missing(S[., j]))
         n_valid   = rows(col_clean)
-        if (n_valid == 0) continue
-        col_clean = sort(col_clean, 1)
-        lo_pos    = max((1, round(alpha/2 * n_valid)))
-        hi_pos    = min((n_valid, round((1 - alpha/2) * n_valid)))
-        lo_vec[j] = col_clean[lo_pos]
-        hi_vec[j] = col_clean[hi_pos]
+        if (n_valid > 0) {
+            col_clean = sort(col_clean, 1)
+            lo_pos    = max((1, round(alpha/2 * n_valid)))
+            hi_pos    = min((n_valid, round((1 - alpha/2) * n_valid)))
+            lo_raw[j] = col_clean[lo_pos]
+            hi_raw[j] = col_clean[hi_pos]
+        }
     }
-    st_matrix("_apexogLO_PCT", lo_vec)
-    st_matrix("_apexogHI_PCT", hi_vec)
-    // Back-compat: locals for the first endog
+    st_matrix("_apexogLO_PCT",   lo_vec)
+    st_matrix("_apexogHI_PCT",   hi_vec)
+    st_matrix("_apexogLO_PRIOR", lo_raw)
+    st_matrix("_apexogHI_PRIOR", hi_raw)
+    st_matrix("_apexogSIMCNV",   C)
+    // Back-compat: locals for the first target (now the convolved interval)
     st_local("lo_pct", strofreal(lo_vec[1], "%21.15g"))
     st_local("hi_pct", strofreal(hi_vec[1], "%21.15g"))
 }
