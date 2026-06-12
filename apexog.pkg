@@ -16,6 +16,13 @@ d   Inference uses a Murphy-Topel two-step sandwich computed in
 d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
 d   margins, dydx() to machine precision.
 d
+d   Features (v0.15.0):
+d     - gunits(pr): supply gamma values as PROBABILITY POINTS; they are
+d       converted to latent-index units via m_phi = mean(normalden(xb))
+d       from the baseline fit (puts apexog on the same violation scale
+d       as plausexog run on a binary outcome).  m_phi reported and
+d       stored in e(mphi).
+d
 d   Features (v0.14.0):
 d     - LTZ interval now CONVOLVES sampling noise with the gamma prior
 d       (CHR 2012 eq. 7; the simulation analog of plausexog's
@@ -61,7 +68,7 @@ d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhu
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d License: MIT (https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE)
 d
-d Distribution-Date: 20260610
+d Distribution-Date: 20260612
 d
 f apexog.ado
 f apexog.sthlp

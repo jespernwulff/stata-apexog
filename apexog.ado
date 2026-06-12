@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.14.0  2026-06-10
+*! Version 0.15.0  2026-06-12
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,27 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.15.0 changelog (vs v0.14.0) -- probability-point gamma units:
+*!   - New gunits(latent|pr) option.  apexog's gamma lives in the LATENT INDEX
+*!     (the offset shifts y* in probit-sd units), whereas plausexog applied to
+*!     a binary outcome is an LPM whose gamma is the instrument's direct
+*!     effect on Pr(y=1).  With gunits(pr), all user-supplied gamma values
+*!     (gmin/gmax, mu/omega, distribution() draws) are interpreted as
+*!     PROBABILITY POINTS and converted to latent units by dividing by
+*!     m_phi = mean(normalden(eta_hat)) from the baseline (gamma=0) fit --
+*!     the average dPr/dindex slope, i.e. the same factor that maps the
+*!     latent coefficient into the APE.  (omega, a variance, is divided by
+*!     m_phi^2; for non-Gaussian distribution() priors the DRAW is rescaled,
+*!     which is equivalent and works for chi2/t/gamma/poisson/special whose
+*!     parameters are not scale parameters.)  The conversion is first-order
+*!     (exact as gamma -> 0); all gamma values displayed and stored
+*!     (e(grid), graphs) are LATENT units, with a header note when
+*!     gunits(pr) is active.  Default gunits(latent) is byte-identical to
+*!     v0.14.0.
+*!   - Both methods now always print the elicitation aid line
+*!     "1 latent-index unit of gamma = m_phi pr. points per unit of Z" and
+*!     return e(mphi) and e(gunits).  _apexogfit returns r(mphi).
 *!
 *! v0.14.0 changelog (vs v0.13.2) -- LTZ interval now convolves sampling noise:
 *!   - Pre-0.14, the LTZ percentile interval was taken over the per-draw POINT
@@ -255,6 +276,7 @@ program apexog, eclass
         grid(integer 11)
         gmin(numlist)
         gmax(numlist)
+        GUnits(string)
         level(real 0.95)
         mu(numlist min=1)
         omega(numlist min=1)
@@ -297,6 +319,11 @@ program apexog, eclass
     }
     if `level' <= 0 | `level' >= 1 {
         _apexogerr "Confidence level must be in (0,1); you gave level(`level')."
+    }
+    if "`gunits'" == "probability" local gunits "pr"
+    if "`gunits'" == ""            local gunits "latent"
+    if "`gunits'" != "latent" & "`gunits'" != "pr" {
+        _apexogerr "gunits() must be latent (default) or pr.  You typed: gunits(`gunits')."
     }
 
     local yvar `1'
@@ -1330,6 +1357,48 @@ program apexog, eclass
     matrix _apexogBASE_HI  = r(hi_vec)
 
     *==========================================================================
+    * (6b) gamma scale.  m_phi = mean(normalden(eta_hat)) at the baseline fit
+    *      is the average dPr/dindex slope: 1 latent-index unit of gamma moves
+    *      Pr(y=1) by m_phi per unit of Z, on average.  With gunits(pr), all
+    *      user-supplied gamma quantities are PROBABILITY POINTS and are
+    *      converted to latent units here, AFTER the baseline fit (which is
+    *      gamma-free) and BEFORE the UCI/LTZ loops.  The conversion is
+    *      first-order (exact as gamma -> 0).  Everything downstream --
+    *      offsets, e(grid), graphs, displayed gamma values -- is latent.
+    *==========================================================================
+    scalar _apexogMPHI0 = r(mphi)
+    if "`gunits'" == "pr" {
+        if _apexogMPHI0 >= . {
+            _apexogerr "gunits(pr) needs m_phi from a successful baseline fit, but the baseline failed."
+        }
+        local _ginv : di %21.15g 1/scalar(_apexogMPHI0)
+        if "`method'" == "uci" {
+            forvalues k = 1/`count_iv' {
+                local gmin`k' = `gmin`k'' * `_ginv'
+                local gmax`k' = `gmax`k'' * `_ginv'
+            }
+        }
+        if "`method'" == "ltz" & "`ltz_mode'" == "gaussian" {
+            * convert the prior parameters and rebuild the draw expressions
+            forvalues k = 1/`count_iv' {
+                local mu`k'    = `mu`k''    * `_ginv'
+                local omega`k' = `omega`k'' * (`_ginv')^2
+                local _sd_k = sqrt(`omega`k'')
+                local gammaCall`k' = "`mu`k'' + `_sd_k'*rnormal()"
+            }
+        }
+        if "`method'" == "ltz" & "`ltz_mode'" == "distribution" & "`special_pending'" != "1" {
+            * non-scale parameters (chi2 df, t df, ...) cannot be rescaled;
+            * rescaling the DRAW is equivalent and universal
+            forvalues k = 1/`count_iv' {
+                local gammaCall`k' = "(`gammaCall`k'')*(`_ginv')"
+            }
+        }
+        * distribution(special): gammaCall is rebuilt inside the LTZ block
+        * (after touse exists); the wrap is applied there.
+    }
+
+    *==========================================================================
     * (7) UCI: grid over [gmin_k, gmax_k] for each instrument k
     *==========================================================================
     if "`method'" == "uci" {
@@ -1466,6 +1535,13 @@ program apexog, eclass
                 }
             }
             di as text " "
+            di as text "Scale:     1 latent-index unit of gamma = " %6.4f scalar(_apexogMPHI0) ///
+                " pr. points per unit of Z (avg., baseline)"
+            if "`gunits'" == "pr" {
+                di as text "           gunits(pr): user gamma values were probability points;" ///
+                    " divided by m_phi.  Values below are latent units."
+            }
+            di as text " "
             di as text "UCI union over gamma grid (`grid' point(s) per IV):"
             forvalues k = 1/`count_iv' {
                 local zname : word `k' of `ivlabels'
@@ -1489,6 +1565,8 @@ program apexog, eclass
         ereturn clear
         ereturn scalar N             = `N'
         ereturn scalar level         = `level'
+        ereturn scalar mphi          = scalar(_apexogMPHI0)
+        ereturn local  gunits        "`gunits'"
         *--- Optional graph: APE/AIE vs gamma over the UCI grid ----------------
         * Do this BEFORE the `ereturn matrix' so _apexogGRID still exists.
         if "`graph'" != "" & `count_iv' == 1 {
@@ -1614,6 +1692,10 @@ program apexog, eclass
             local _apexog_nrows = rowsof(`_apexogDONOR')
             forvalues k = 1/`count_iv' {
                 local gammaCall`k' = "`_apexogDONOR'[ceil(runiform()*`_apexog_nrows'), `k']"
+                if "`gunits'" == "pr" {
+                    local _ginv : di %21.15g 1/scalar(_apexogMPHI0)
+                    local gammaCall`k' = "(`gammaCall`k'')*(`_ginv')"
+                }
             }
         }
 
@@ -1702,6 +1784,13 @@ program apexog, eclass
                 }
             }
             di as text " "
+            di as text "Scale:     1 latent-index unit of gamma = " %6.4f scalar(_apexogMPHI0) ///
+                " pr. points per unit of Z (avg., baseline)"
+            if "`gunits'" == "pr" {
+                di as text "           gunits(pr): user gamma values were probability points;" ///
+                    " divided by m_phi.  Values below are latent units."
+            }
+            di as text " "
             di as text "LTZ prior:"
             forvalues k = 1/`count_iv' {
                 local zname : word `k' of `ivlabels'
@@ -1756,6 +1845,8 @@ program apexog, eclass
         ereturn scalar iterations    = `iterations'
         ereturn scalar baseline_ape  = `baseline_ape'
         ereturn scalar baseline_se   = `baseline_se'
+        ereturn scalar mphi          = scalar(_apexogMPHI0)
+        ereturn local  gunits        "`gunits'"
         *--- Optional graph: histogram of the CONVOLVED LTZ simulation draws --
         * (APE_i + SE_i*eps_i -- the draws behind the headline CI).
         * For multi-endog APE, plot the FIRST endog's distribution only.
@@ -1908,6 +1999,7 @@ program _apexogfit, rclass
         return scalar se      = .
         return scalar lo      = .
         return scalar hi      = .
+        return scalar mphi    = .
         exit
     }
 
@@ -1941,6 +2033,7 @@ program _apexogfit, rclass
         return scalar se      = .
         return scalar lo      = .
         return scalar hi      = .
+        return scalar mphi    = .
         exit
     }
 
@@ -1950,6 +2043,7 @@ program _apexogfit, rclass
     return scalar se  = _apexogSE_vec[1, 1]
     return scalar lo  = _apexogLO_vec[1, 1]
     return scalar hi  = _apexogHI_vec[1, 1]
+    return scalar mphi = scalar(_apexogMPHI)
     return matrix ape_vec = _apexogAPE_vec
     return matrix se_vec  = _apexogSE_vec
     return matrix lo_vec  = _apexogLO_vec
@@ -2225,6 +2319,9 @@ void _apexogfit_apese_mt(string scalar yvar,
     phi_eta  = normalden(eta)
     Phi_eta  = normal(eta)
     Phim_eta = normal(-eta)
+    // average dPr/dindex slope: converts latent-index units to probability
+    // points (used by gunits(pr) and reported as an elicitation aid)
+    st_numscalar("_apexogMPHI", mean(phi_eta))
     psi      = (y :- Phi_eta) :* phi_eta :/ (Phi_eta :* Phim_eta)
     psi_eta_psi = psi :* (eta :+ psi)
 

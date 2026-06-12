@@ -81,6 +81,7 @@ Factor-variable instruments (e.g. `dummy##c.eldisadv`) are supported: they are e
 - **Factor-variable instruments** are expanded and cleaned to full rank (base/collinear terms dropped); a single `gmin`/`gmax`/`mu`/`omega` value broadcasts to all instruments.
 - **Auto-detection** of binary endogenous regressors → discrete-change APE.
 - **LTZ priors**: Gaussian via `mu()` + `omega()`, or non-Gaussian via `distribution(normal | uniform | chi2 | t | gamma | poisson | special)`.
+- **Gamma units**: γ lives in the latent index; with `gunits(pr)` you can instead supply γ values as **probability points** (the instrument's direct effect on Pr(y=1), the scale of `plausexog` run on a binary outcome). Values are divided internally by m̂ = mean φ(η̂) from the baseline fit; m̂ is printed in the header and returned in `e(mphi)` (v0.15.0).
 - **Inference**: Murphy-Topel two-step sandwich; `vce(robust)` (default), `vce(cluster <id>)`.
 - **Graphing**: line plot of APE vs γ (`uci`) or histogram of the convolved LTZ draws (`ltz`).
 

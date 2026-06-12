@@ -55,6 +55,7 @@ where {it:method} is one of:
 {synopt:{opt seed(#)}}random-number seed for reproducibility{p_end}
 
 {syntab:Inference}
+{synopt:{opt gu:nits(latent|pr)}}units of the user-supplied gamma values: {opt latent} (default, latent-index units) or {opt pr} (probability points; divided by m_phi from the baseline fit){p_end}
 {synopt:{opt level(#)}}confidence/credible level; default {cmd:level(.95)}{p_end}
 {synopt:{opt vce(}{it:vcetype}{cmd:)}}{it:vcetype} may be {opt robust} (default) or {opt cluster} {it:clustvar}{p_end}
 
@@ -229,6 +230,31 @@ before drawing the gamma samples.  Use this for reproducibility.
 {dlgtab:Inference}
 
 {phang}
+{opt gunits(latent|pr)} {hline 2} units in which the user-supplied gamma
+quantities ({opt gmin()}/{opt gmax()}, {opt mu()}/{opt omega()}, and
+{opt distribution()} draws) are expressed.
+
+{phang2}{cmd:gunits(latent)} (default) {hline 2} gamma is a coefficient in the
+latent index (probit standard-deviation units), i.e. the direct effect of the
+instrument on y*.  This is the structural scale on which the offset enters
+the model.{p_end}
+
+{phang2}{cmd:gunits(pr)} {hline 2} gamma values are PROBABILITY POINTS: the
+instrument's direct effect on Pr(y=1) per unit of Z.  Internally apexog
+divides every gamma quantity by m_phi = mean(normalden(eta_hat)) from the
+baseline (gamma = 0) fit -- the average dPr/dindex slope, the same factor
+that maps the latent coefficient into the APE ({opt omega()}, a variance, is
+divided by m_phi^2; for non-Gaussian {opt distribution()} priors the draw
+itself is rescaled, which handles chi2/t/gamma/poisson/special whose
+parameters are not scale parameters).  This puts apexog's gamma on the same
+scale as {help plausexog}'s when the outcome is binary and plausexog is run
+as a linear probability model, so the two commands can be compared for the
+same elicited violation.  The conversion is first-order (exact as
+gamma -> 0; m_phi is held at its baseline value).  All gamma values
+displayed and stored ({cmd:e(grid)}, graphs) are in LATENT units; a header
+note records the conversion, and m_phi is returned in {cmd:e(mphi)}.{p_end}
+
+{phang}
 {opt level(#)} {hline 2} confidence level (both methods; for {cmd:ltz} it is
 the percentile level of the convolved draws).  Must be in (0, 1).
 Default 0.95.
@@ -315,6 +341,7 @@ when d is endogenous.  Prefer the explicit two-endog form above.{p_end}
 {synopt:{cmd:e(level)}}confidence level{p_end}
 {synopt:{cmd:e(baseline_ape)}}APE (or AIE if {opt aie()}) at gamma = 0{p_end}
 {synopt:{cmd:e(baseline_se)}}MT-corrected SE at gamma = 0{p_end}
+{synopt:{cmd:e(mphi)}}mean(normalden(eta_hat)) at the baseline fit: average dPr/dindex slope; the latent-to-probability conversion factor used by {opt gunits(pr)}{p_end}
 {synopt:{cmd:e(lb_}{it:endog}{cmd:)}}lower bound of the APE interval (per endog){p_end}
 {synopt:{cmd:e(ub_}{it:endog}{cmd:)}}upper bound of the APE interval (per endog){p_end}
 {synopt:{cmd:e(lb_aie)} / {cmd:e(ub_aie)}}lower/upper bound of the AIE interval (with {opt aie()}){p_end}
@@ -326,6 +353,7 @@ when d is endogenous.  Prefer the explicit two-endog form above.{p_end}
 {p2col 5 20 24 2: Macros}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:apexog}{p_end}
 {synopt:{cmd:e(method)}}{cmd:uci} or {cmd:ltz}{p_end}
+{synopt:{cmd:e(gunits)}}{cmd:latent} or {cmd:pr} (units of the user-supplied gamma values){p_end}
 {synopt:{cmd:e(estimator)}}{cmd:cfprobit}{p_end}
 {synopt:{cmd:e(firststage)}}{cmd:linear}, {cmd:probit}, {cmd:fprobit}, or {cmd:poisson}{p_end}
 {synopt:{cmd:e(vce)}}{cmd:Murphy-Topel}{p_end}
@@ -436,6 +464,20 @@ it answers "how does the bias-adjusted estimate move as gamma varies over the
 prior", not "what is a confidence interval for the APE".  For multiple
 targets the eps draws are independent across targets, which is exact for the
 per-target marginal intervals reported.
+
+{pstd}
+{ul:Gamma scale.}  The violation enters the LATENT index:
+Pr(y=1) = Phi(... + z'gamma), so gamma is in probit standard-deviation
+units, whereas {help plausexog} applied to a binary outcome (an LPM) takes
+gamma in probability units.  The two scales are linked by the average link
+slope m_phi = mean(normalden(eta_hat)): the average direct effect of Z on
+Pr(y=1) implied by a latent gamma is m_phi * gamma.  {opt gunits(pr)}
+applies the conversion gamma_latent = gamma_pr / m_phi (variances divided by
+m_phi^2) using the baseline fit, which makes apexog and plausexog bounds
+comparable on a common probability-scale violation axis.  The conversion is
+local: m_phi is evaluated at gamma = 0 and the mapping is exact in the
+limit gamma -> 0.  m_phi is reported in the output header and stored in
+{cmd:e(mphi)}.
 
 {pstd}
 {ul:Average Interaction Effect (with {opt aie(X Z)})}.  Three cases
