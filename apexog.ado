@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.15.0  2026-06-12
+*! Version 0.16.0  2026-06-12
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,30 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.16.0 changelog (vs v0.15.0) -- proper e() posting, guards, delta sweep:
+*!   - e(b)/e(V)/e(sample) now POSTED: e(b) holds the baseline (gamma=0)
+*!     target estimates (APE per endog, or the AIE) and e(V) their full
+*!     Murphy-Topel delta-method covariance (cross-target terms from the
+*!     shared V_beta) with esample() set -- so `if e(sample)', test, lincom,
+*!     estimates store, and replay all work.  Replay (`apexog' after
+*!     estimation) redisplays the coefficient table.  This also removes the
+*!     old r(301) quirk with subsequent estimation commands.
+*!   - New guards: (i) the estimation sample now marks out missing values of
+*!     ALL endogenous regressors (previously only the first) and of the
+*!     cluster variable; (ii) _apexogfit returns missings with a warning if
+*!     the probit silently dropped observations (perfect prediction) or if
+*!     an endog/control-function column was omitted as collinear (the MT
+*!     math is undefined in either case).
+*!   - New LTZ delta-sweep: graphomega(numlist) [graphmu() graphdelta()]
+*!     reruns the simulation for a sequence of prior widths (single value
+*!     per sweep step, broadcast to all instruments; Gaussian priors only)
+*!     and reports/plots the CHR-figure "bounds vs delta": e(sweep) matrix
+*!     (delta mu lb ub lb_prior ub_prior); with graph, the sweep plot
+*!     replaces the LTZ histogram.  gunits(pr) applies to sweep values too.
+*!   - Packaging claim corrected: StataNow is NOT required at runtime
+*!     (apexog never calls cfprobit; the cfprobit comparisons live only in
+*!     the validation suite).  Requires Stata 18.
 *!
 *! v0.15.0 changelog (vs v0.14.0) -- probability-point gamma units:
 *!   - New gunits(latent|pr) option.  apexog's gamma lives in the LATENT INDEX
@@ -267,6 +291,13 @@ cap program drop _apexogerr
 
 program apexog, eclass
     version 18
+    * Replay: `apexog' (no arguments) after estimation redisplays e(b)/e(V).
+    if replay() {
+        if "`e(cmd)'" != "apexog" error 301
+        di as text "apexog `e(method)' (replay): baseline (gamma=0) target estimates"
+        ereturn display
+        exit
+    }
     #delimit ;
     syntax anything(name=0 id="variable list")
     [if] [in]
@@ -286,6 +317,9 @@ program apexog, eclass
         vce(string)
         noheader
         debug
+        graphomega(numlist)
+        graphmu(numlist)
+        graphdelta(numlist)
         GRAph
         GRAPHOPTions(string asis)
         AIE(string)
@@ -324,6 +358,9 @@ program apexog, eclass
     if "`gunits'" == ""            local gunits "latent"
     if "`gunits'" != "latent" & "`gunits'" != "pr" {
         _apexogerr "gunits() must be latent (default) or pr.  You typed: gunits(`gunits')."
+    }
+    if "`graphomega'`graphmu'`graphdelta'" != "" & "`method'" != "ltz" {
+        _apexogerr "graphomega()/graphmu()/graphdelta() (the delta sweep) require method ltz."
     }
 
     local yvar `1'
@@ -1025,7 +1062,7 @@ program apexog, eclass
     * (3) Determine the estimation sample
     *==========================================================================
     marksample touse
-    markout `touse' `yvar' `varlist1' `dvar' `varlist_iv' `aieendog_tempvar'
+    markout `touse' `yvar' `varlist1' `varlist2' `varlist_iv' `aieendog_tempvar' `clustvar'
     qui count if `touse'
     local N = r(N)
     if `N' == 0 _apexogerr "No observations remain after if/in and missing-data filtering."
@@ -1367,6 +1404,8 @@ program apexog, eclass
     *      offsets, e(grid), graphs, displayed gamma values -- is latent.
     *==========================================================================
     scalar _apexogMPHI0 = r(mphi)
+    * Cross-target MT covariance of the baseline estimates (for ereturn post)
+    matrix _apexogVTGT0 = r(vtgt)
     if "`gunits'" == "pr" {
         if _apexogMPHI0 >= . {
             _apexogerr "gunits(pr) needs m_phi from a successful baseline fit, but the baseline failed."
@@ -1562,11 +1601,6 @@ program apexog, eclass
             di as text "{hline 78}"
         }
 
-        ereturn clear
-        ereturn scalar N             = `N'
-        ereturn scalar level         = `level'
-        ereturn scalar mphi          = scalar(_apexogMPHI0)
-        ereturn local  gunits        "`gunits'"
         *--- Optional graph: APE/AIE vs gamma over the UCI grid ----------------
         * Do this BEFORE the `ereturn matrix' so _apexogGRID still exists.
         if "`graph'" != "" & `count_iv' == 1 {
@@ -1608,6 +1642,39 @@ program apexog, eclass
             di as text "  [note] graph is only supported with a single instrument; skipping."
         }
 
+        * Post the baseline target estimates as e(b)/e(V) with e(sample), so
+        * `if e(sample)', test/lincom, estimates store, and replay all work.
+        * e(b) = baseline (gamma=0) APE per endog (or the 1x1 AIE); e(V) = the
+        * Murphy-Topel delta-method covariance of those targets (cross-target
+        * terms from the shared V_beta).  Falls back to a bare ereturn clear
+        * if the baseline fit failed.
+        local _postok = !matmissing(_apexogBASE_APE) & !matmissing(_apexogVTGT0)
+        tempname _bT _VT
+        if `_postok' {
+            matrix `_bT' = _apexogBASE_APE'
+            matrix `_VT' = _apexogVTGT0
+            local _tgtnames ""
+            if `aie_active' local _tgtnames "aie"
+            else {
+                local j = 0
+                foreach endogvar of local varlist2 {
+                    local ++j
+                    if strpos("`endogvar'", "__") == 1 local _tgtnames "`_tgtnames' endog`j'"
+                    else                               local _tgtnames "`_tgtnames' `endogvar'"
+                }
+            }
+            matrix colnames `_bT' = `_tgtnames'
+            matrix colnames `_VT' = `_tgtnames'
+            matrix rownames `_VT' = `_tgtnames'
+            ereturn post `_bT' `_VT', esample(`touse') obs(`N')
+        }
+        else {
+            ereturn clear
+            ereturn scalar N         = `N'
+        }
+        ereturn scalar level         = `level'
+        ereturn scalar mphi          = scalar(_apexogMPHI0)
+        ereturn local  gunits        "`gunits'"
         ereturn scalar baseline_ape  = `baseline_ape'
         ereturn scalar baseline_se   = `baseline_se'
         ereturn scalar baseline_lo   = `baseline_lo'
@@ -1839,18 +1906,111 @@ program apexog, eclass
             di as text "{hline 78}"
         }
 
-        ereturn clear
-        ereturn scalar N             = `N'
-        ereturn scalar level         = `level'
-        ereturn scalar iterations    = `iterations'
-        ereturn scalar baseline_ape  = `baseline_ape'
-        ereturn scalar baseline_se   = `baseline_se'
-        ereturn scalar mphi          = scalar(_apexogMPHI0)
-        ereturn local  gunits        "`gunits'"
-        *--- Optional graph: histogram of the CONVOLVED LTZ simulation draws --
-        * (APE_i + SE_i*eps_i -- the draws behind the headline CI).
-        * For multi-endog APE, plot the FIRST endog's distribution only.
-        if "`graph'" != "" {
+        *--- Optional delta sweep: rerun the LTZ simulation for a sequence of
+        *    prior widths (graphomega(); one value per step, broadcast to all
+        *    instruments; Gaussian priors only) -- the CHR "bounds vs delta"
+        *    figure.  Runs AFTER the main results, so the headline above is
+        *    unchanged; uses dedicated _apexogSW* matrices so nothing the
+        *    main path stored is clobbered.  Tracks the FIRST target (the
+        *    AIE, or the first endog's APE).
+        local n_sweep : word count `graphomega'
+        if `n_sweep' > 0 {
+            if "`ltz_mode'" != "gaussian" {
+                _apexogerr "graphomega() requires the Gaussian mu()/omega() prior (not distribution())."
+            }
+            local n_smu : word count `graphmu'
+            if `n_smu' == 0 {
+                forvalues s = 1/`n_sweep' {
+                    local graphmu "`graphmu' 0"
+                }
+            }
+            else if `n_smu' != `n_sweep' {
+                _apexogerr "graphmu() must have as many values as graphomega()."
+            }
+            local n_sd : word count `graphdelta'
+            if `n_sd' > 0 & `n_sd' != `n_sweep' {
+                _apexogerr "graphdelta() must have as many values as graphomega()."
+            }
+            matrix _apexogSWEEP = J(`n_sweep', 6, .)
+            matrix colnames _apexogSWEEP = delta mu lb ub lb_prior ub_prior
+            di as text _newline "Delta sweep: `n_sweep' prior width(s) x `iterations' draws each (first target)."
+            forvalues s = 1/`n_sweep' {
+                local om_s : word `s' of `graphomega'
+                local mu_s : word `s' of `graphmu'
+                if `n_sd' > 0 local de_s : word `s' of `graphdelta'
+                else          local de_s = `om_s'
+                if `om_s' <= 0 _apexogerr "graphomega() values must be > 0."
+                * same unit conversion as the main prior
+                local om_use = `om_s'
+                local mu_use = `mu_s'
+                if "`gunits'" == "pr" {
+                    local _ginvs : di %21.15g 1/scalar(_apexogMPHI0)
+                    local om_use = `om_s' * (`_ginvs')^2
+                    local mu_use = `mu_s' * `_ginvs'
+                }
+                local sd_s = sqrt(`om_use')
+                matrix _apexogSWAPE = J(`iterations', 1, .)
+                matrix _apexogSWSE  = J(`iterations', 1, .)
+                forvalues iter = 1/`iterations' {
+                    qui replace `offvar' = 0 if `touse'
+                    foreach z of local varlist_iv {
+                        local g_draw = `mu_use' + `sd_s'*rnormal()
+                        qui replace `offvar' = `offvar' + `g_draw'*`z' if `touse'
+                    }
+                    _apexogfit, touse(`touse')                                            ///
+                        yvar(`yvar') endoglist(`varlist2') chat0list(`chat0_list')      ///
+                        offvar(`offvar') aweightlist(`A_list')                          ///
+                        exoglist(`varlist1') ivlist(`varlist_iv')                       ///
+                        clustvar(`clustvar') vcetype(`vcetype')                         ///
+                        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') ///
+                        level(`level')
+                    matrix _apexogITER_APE = r(ape_vec)
+                    matrix _apexogITER_SE  = r(se_vec)
+                    matrix _apexogSWAPE[`iter', 1] = _apexogITER_APE[1, 1]
+                    matrix _apexogSWSE[`iter', 1]  = _apexogITER_SE[1, 1]
+                }
+                mata: _apexogsweep_pct(`level')
+                matrix _apexogSWEEP[`s', 1] = `de_s'
+                matrix _apexogSWEEP[`s', 2] = `mu_s'
+                matrix _apexogSWEEP[`s', 3] = scalar(_apexogSW_lo)
+                matrix _apexogSWEEP[`s', 4] = scalar(_apexogSW_hi)
+                matrix _apexogSWEEP[`s', 5] = scalar(_apexogSW_lop)
+                matrix _apexogSWEEP[`s', 6] = scalar(_apexogSW_hip)
+                di as text "  sweep `s'/`n_sweep': omega = " %-9.0g `om_s' ///
+                    "  CI [" %9.6f scalar(_apexogSW_lo) ", " %9.6f scalar(_apexogSW_hi) "]"
+            }
+        }
+
+        *--- Optional graph.  With graphomega(): the CHR "bounds vs delta"
+        *    sweep plot.  Otherwise: histogram of the CONVOLVED LTZ draws
+        *    (APE_i + SE_i*eps_i -- the draws behind the headline CI).
+        *    For multi-endog APE, both track the FIRST endog only.
+        if "`graph'" != "" & `n_sweep' > 0 {
+            preserve
+            clear
+            svmat _apexogSWEEP, names(col)
+            local _xunits ""
+            if "`gunits'" == "pr" local _xunits " (pr units)"
+            if `"`graphoptions'"' == "" {
+                local graphoptions ///
+                    title("LTZ bounds vs prior width")                          ///
+                    subtitle("`iterations' draws per width; first target")      ///
+                    xtitle("delta = prior variance`_xunits'")                   ///
+                    ytitle("APE / AIE (probability scale)")                     ///
+                    legend(order(1 "LTZ CI" 3 "prior-only band"))               ///
+                    note("Solid: convolved LTZ CI (CHR 2012 eq. 7).  Dashed: prior-only sensitivity band." ///
+                         "Dotted horizontal line: baseline (gamma = 0) estimate.")
+            }
+            sort delta
+            twoway (line lb delta, lcolor(blue))                        ///
+                   (line ub delta, lcolor(blue))                        ///
+                   (line lb_prior delta, lpattern(dash) lcolor(gray))   ///
+                   (line ub_prior delta, lpattern(dash) lcolor(gray)),  ///
+                   yline(`baseline_ape', lpattern(dot) lcolor(black))   ///
+                   `graphoptions'
+            restore
+        }
+        else if "`graph'" != "" {
             preserve
             clear
             svmat _apexogSIMCNV, names(col)
@@ -1885,6 +2045,42 @@ program apexog, eclass
             restore
         }
 
+        * Post the baseline target estimates as e(b)/e(V) with e(sample) (see
+        * the UCI block for the rationale); falls back to ereturn clear if the
+        * baseline fit failed.
+        local _postok = !matmissing(_apexogBASE_APE) & !matmissing(_apexogVTGT0)
+        tempname _bT _VT
+        if `_postok' {
+            matrix `_bT' = _apexogBASE_APE'
+            matrix `_VT' = _apexogVTGT0
+            local _tgtnames ""
+            if `aie_active' local _tgtnames "aie"
+            else {
+                local j = 0
+                foreach endogvar of local varlist2 {
+                    local ++j
+                    if strpos("`endogvar'", "__") == 1 local _tgtnames "`_tgtnames' endog`j'"
+                    else                               local _tgtnames "`_tgtnames' `endogvar'"
+                }
+            }
+            matrix colnames `_bT' = `_tgtnames'
+            matrix colnames `_VT' = `_tgtnames'
+            matrix rownames `_VT' = `_tgtnames'
+            ereturn post `_bT' `_VT', esample(`touse') obs(`N')
+        }
+        else {
+            ereturn clear
+            ereturn scalar N         = `N'
+        }
+        ereturn scalar level         = `level'
+        ereturn scalar iterations    = `iterations'
+        ereturn scalar baseline_ape  = `baseline_ape'
+        ereturn scalar baseline_se   = `baseline_se'
+        ereturn scalar mphi          = scalar(_apexogMPHI0)
+        ereturn local  gunits        "`gunits'"
+        if `n_sweep' > 0 {
+            ereturn matrix sweep = _apexogSWEEP
+        }
         if `aie_active' {
             * AIE mode: single interval stored under e(lb_aie) / e(ub_aie)
             scalar _apexogLO_temp = _apexogLO_PCT[1, 1]
@@ -2000,6 +2196,49 @@ program _apexogfit, rclass
         return scalar lo      = .
         return scalar hi      = .
         return scalar mphi    = .
+        matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
+        return matrix vtgt    = _apexogVTGT
+        exit
+    }
+
+    * Guard 1: the probit must have used the FULL touse sample.  Under perfect
+    * prediction/separation, probit silently drops observations, which would
+    * misalign the Mata views (built on the full touse) with the fitted
+    * coefficients.
+    * Guard 2: no endogenous regressor, control function, or CF product may
+    * have been omitted as collinear (b = 0 AND se = 0) -- the APE/AIE and the
+    * MT cross-Hessian are undefined for an omitted load-bearing column.
+    * (Exog controls MAY carry omitted factor base levels; invsym handles
+    * those directions, as validated on the factor-control real-data specs.)
+    local _bad ""
+    qui count if `touse'
+    if e(N) < r(N) {
+        local _bad "probit used `e(N)' of `r(N)' obs (perfect prediction?)"
+    }
+    if "`_bad'" == "" {
+        foreach _v in `endoglist' `chat0list' `cfprodlist' {
+            if _b[`_v'] == 0 & _se[`_v'] == 0 {
+                local _bad "`_v' omitted from the probit (collinear)"
+            }
+        }
+    }
+    if "`_bad'" != "" {
+        di as text "  [warn] `_bad'; returning missing for this fit."
+        matrix _apexogAPE_vec = J(`_n_endog', 1, .)
+        matrix _apexogSE_vec  = J(`_n_endog', 1, .)
+        matrix _apexogLO_vec  = J(`_n_endog', 1, .)
+        matrix _apexogHI_vec  = J(`_n_endog', 1, .)
+        return matrix ape_vec = _apexogAPE_vec
+        return matrix se_vec  = _apexogSE_vec
+        return matrix lo_vec  = _apexogLO_vec
+        return matrix hi_vec  = _apexogHI_vec
+        return scalar ape     = .
+        return scalar se      = .
+        return scalar lo      = .
+        return scalar hi      = .
+        return scalar mphi    = .
+        matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
+        return matrix vtgt    = _apexogVTGT
         exit
     }
 
@@ -2034,6 +2273,8 @@ program _apexogfit, rclass
         return scalar lo      = .
         return scalar hi      = .
         return scalar mphi    = .
+        matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
+        return matrix vtgt    = _apexogVTGT
         exit
     }
 
@@ -2044,6 +2285,7 @@ program _apexogfit, rclass
     return scalar lo  = _apexogLO_vec[1, 1]
     return scalar hi  = _apexogHI_vec[1, 1]
     return scalar mphi = scalar(_apexogMPHI)
+    return matrix vtgt = _apexogVTGT
     return matrix ape_vec = _apexogAPE_vec
     return matrix se_vec  = _apexogSE_vec
     return matrix lo_vec  = _apexogLO_vec
@@ -2142,6 +2384,43 @@ void _apexogsim_pct(real scalar level)
 }
 
 // ----------------------------------------------------------------------------
+// _apexogsweep_pct: percentile intervals for ONE delta-sweep step.  Reads the
+// n_iter x 1 matrices _apexogSWAPE (point APEs/AIEs) and _apexogSWSE (MT SEs),
+// convolves exactly as _apexogsim_pct does, and writes four scalars:
+// _apexogSW_lo/_apexogSW_hi (convolved CI) and _apexogSW_lop/_apexogSW_hip
+// (prior-only band).  Uses its own matrix names so the main LTZ results are
+// never clobbered.
+// ----------------------------------------------------------------------------
+void _apexogsweep_pct(real scalar level)
+{
+    real colvector ape, se, T, s
+    real matrix    R
+    real scalar    n, lo_pos, hi_pos, a
+    R   = st_matrix("_apexogSWAPE"), st_matrix("_apexogSWSE")
+    R   = select(R, !rowmissing(R))
+    n   = rows(R)
+    a   = 1 - level
+    if (n == 0) {
+        st_numscalar("_apexogSW_lo",  .)
+        st_numscalar("_apexogSW_hi",  .)
+        st_numscalar("_apexogSW_lop", .)
+        st_numscalar("_apexogSW_hip", .)
+        return
+    }
+    ape = R[., 1]
+    se  = R[., 2]
+    T   = ape + se :* rnormal(n, 1, 0, 1)
+    lo_pos = max((1, round(a/2 * n)))
+    hi_pos = min((n, round((1 - a/2) * n)))
+    s = sort(T, 1)
+    st_numscalar("_apexogSW_lo",  s[lo_pos])
+    st_numscalar("_apexogSW_hi",  s[hi_pos])
+    s = sort(ape, 1)
+    st_numscalar("_apexogSW_lop", s[lo_pos])
+    st_numscalar("_apexogSW_hip", s[hi_pos])
+}
+
+// ----------------------------------------------------------------------------
 // _apexogfit_apese_mt: Murphy-Topel-corrected V_beta + APE delta-method SE.
 //
 // Unified for linear and probit first stages via a per-obs weight A_i:
@@ -2210,6 +2489,7 @@ void _apexogfit_apese_mt(string scalar yvar,
     real colvector   eta_1, eta_0, Phi_1, Phi_0, phi_1, phi_0, diff_phi
     real colvector   g_k, cf_a, cf_b
     real rowvector   b_pr, J_beta
+    real matrix      Jall, Vtgt
     real scalar      n_exog, n_iv, n_endog, n_obs, nx, nw, j, k, ci, n_cf
     real scalar      cf_start_idx, cc, aa, bb, m_partner, cf_col_k
     real scalar      d_start_idx, chat_start_idx, cons_idx
@@ -2683,6 +2963,8 @@ void _apexogfit_apese_mt(string scalar yvar,
         st_matrixrowstripe(mname_se,  ("", "AIE"))
         st_matrixrowstripe(mname_lo,  ("", "AIE"))
         st_matrixrowstripe(mname_hi,  ("", "AIE"))
+        // 1x1 target covariance (for ereturn post)
+        st_matrix("_apexogVTGT", J(1, 1, se_aie^2))
         return
     }
 
@@ -2691,6 +2973,7 @@ void _apexogfit_apese_mt(string scalar yvar,
     se_vec  = J(n_endog, 1, .)
     lo_vec  = J(n_endog, 1, .)
     hi_vec  = J(n_endog, 1, .)
+    Jall    = J(nx, n_endog, 0)      // stacked Jacobians for the cross-target cov
 
     for (t = 1; t <= n_endog; t++) {
         target_idx_t      = d_start_idx + t - 1
@@ -2750,6 +3033,8 @@ void _apexogfit_apese_mt(string scalar yvar,
             J_beta[cons_idx] = b_d_t * mean(mean_term)
         }
 
+        Jall[., t] = J_beta'
+
         // Delta-method SE for target t
         se_sq_t = (J_beta * V_beta_MT * J_beta')[1,1]
         if (se_sq_t < 0) {
@@ -2761,6 +3046,13 @@ void _apexogfit_apese_mt(string scalar yvar,
         lo_vec[t] = ape_vec[t] - z_crit*se_t
         hi_vec[t] = ape_vec[t] + z_crit*se_t
     }
+
+    // Full cross-target covariance: Jall' V_beta_MT Jall (symmetrized).
+    // Diagonal == se_vec^2; off-diagonals give the covariance between the
+    // targets' APEs through the shared V_beta (used for ereturn post).
+    Vtgt = Jall' * V_beta_MT * Jall
+    Vtgt = (Vtgt + Vtgt') / 2
+    st_matrix("_apexogVTGT", Vtgt)
 
     // ---------- Return result vectors as Stata matrices ----------
     st_matrix(mname_ape, ape_vec)

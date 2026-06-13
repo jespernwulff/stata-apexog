@@ -16,7 +16,7 @@ Inference uses a closed-form **Murphy-Topel two-step sandwich** computed in Mata
 net install apexog, from("https://raw.githubusercontent.com/jespernwulff/stata-apexog/main/")
 ```
 
-`apexog` requires **StataNow** (Stata 18.5 or later) because it builds on the `cfprobit` family.
+`apexog` requires **Stata 18** or later. **StataNow is not required**: apexog implements the control-function probit directly (`regress`/`probit`/`fracreg`/`poisson` plus Mata) and never calls `cfprobit` at runtime — the `cfprobit` comparisons live only in the validation suite.
 
 To uninstall:
 
@@ -83,7 +83,8 @@ Factor-variable instruments (e.g. `dummy##c.eldisadv`) are supported: they are e
 - **LTZ priors**: Gaussian via `mu()` + `omega()`, or non-Gaussian via `distribution(normal | uniform | chi2 | t | gamma | poisson | special)`.
 - **Gamma units**: γ lives in the latent index; with `gunits(pr)` you can instead supply γ values as **probability points** (the instrument's direct effect on Pr(y=1), the scale of `plausexog` run on a binary outcome). Values are divided internally by m̂ = mean φ(η̂) from the baseline fit; m̂ is printed in the header and returned in `e(mphi)` (v0.15.0).
 - **Inference**: Murphy-Topel two-step sandwich; `vce(robust)` (default), `vce(cluster <id>)`.
-- **Graphing**: line plot of APE vs γ (`uci`) or histogram of the convolved LTZ draws (`ltz`).
+- **Graphing**: line plot of APE vs γ (`uci`), histogram of the convolved LTZ draws (`ltz`), or — with `graphomega()` — the CHR "bounds vs prior width" delta-sweep figure (`ltz`).
+- **Estimation command**: posts `e(b)`/`e(V)` (baseline target estimates with full cross-target Murphy-Topel covariance) and `e(sample)`, so `test`, `lincom`, `estimates store`, `... if e(sample)`, and replay all work (v0.16.0).
 
 ---
 

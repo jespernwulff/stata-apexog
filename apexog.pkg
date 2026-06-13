@@ -16,6 +16,16 @@ d   Inference uses a Murphy-Topel two-step sandwich computed in
 d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
 d   margins, dydx() to machine precision.
 d
+d   Features (v0.16.0):
+d     - estimation command proper: posts e(b) (baseline target estimates)
+d       with full cross-target Murphy-Topel e(V) and e(sample); test,
+d       lincom, estimates store, and replay work
+d     - LTZ delta sweep via graphomega(): bounds vs prior width, the
+d       CHR (2012) Figures 1-2 display; stored in e(sweep)
+d     - sample guards: missing cluster ids / any endog marked out;
+d       perfect prediction and collinear CF columns caught with a
+d       warning instead of silent misalignment
+d
 d   Features (v0.15.0):
 d     - gunits(pr): supply gamma values as PROBABILITY POINTS; they are
 d       converted to latent-index units via m_phi = mean(normalden(xb))
@@ -61,8 +71,11 @@ d       (normal, uniform, chi2, t, gamma, poisson, special)
 d     - vce: robust (default), cluster
 d     - optional graph output for UCI bounds and LTZ histogram
 d
-d   Requires: Stata 18.5 (StataNow) -- cfprobit / cfregress are
-d            StataNow commands.
+d   Requires: Stata 18.  StataNow is NOT required: apexog implements the
+d            control-function probit directly (regress/probit/fracreg/
+d            poisson + Mata) and never calls cfprobit at runtime; the
+d            cfprobit/cfregress comparisons live only in the validation
+d            suite.
 d
 d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhus University
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog

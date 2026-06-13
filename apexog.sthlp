@@ -40,7 +40,7 @@ where {it:method} is one of:
 {syntab:Model}
 {synopt:{opt est:imator(cfprobit)}}main-equation estimator; only {cmd:cfprobit} is supported (default){p_end}
 {synopt:{opt fir:ststage(}{it:type}{cmd:)}}first-stage model: {opt linear} (default), {opt probit}, {opt fprobit}, or {opt poisson}.  Accepts one type (applied to all endogs) or one per endog.{p_end}
-{synopt:{opt aie(}{it:X Z}{cmd:)}}switch the sensitivity target from the APE to the Average Interaction Effect of the continuous-by-continuous interaction {cmd:c.}{it:X}{cmd:##c.}{it:Z}.  See {it:ginteff} (Radean 2023).{p_end}
+{synopt:{opt aie(}{it:X Z}{cmd:)}}switch the sensitivity target from the APE to the Average Interaction Effect of {it:X} and {it:Z} (cts x cts, cts x binary, or binary x binary; type auto-detected).  See {it:ginteff} (Radean 2023).{p_end}
 {synopt:{opt cfint:eract}}add the products of the control functions to the main probit (replicates {help cfprobit}'s {cmd:cfinteract}).  Auto-on when an interaction of an endogenous treatment with a moderator is declared as an endogenous regressor (see below).{p_end}
 
 {syntab:UCI (method = uci)}
@@ -53,10 +53,13 @@ where {it:method} is one of:
 {synopt:{opt omega(numlist)}}Gaussian prior variance for each instrument's gamma (single value broadcast to all){p_end}
 {synopt:{opt iter:ations(#)}}number of Monte-Carlo draws; default {cmd:iterations(1000)}{p_end}
 {synopt:{opt seed(#)}}random-number seed for reproducibility{p_end}
+{synopt:{opt graphomega(numlist)}}delta sweep: rerun the LTZ simulation for each prior variance in the list (one value per step, broadcast to all instruments; Gaussian priors only) and store/plot bounds vs delta{p_end}
+{synopt:{opt graphmu(numlist)}}prior means for the sweep steps (default: zeros){p_end}
+{synopt:{opt graphdelta(numlist)}}x-axis labels for the sweep steps (default: the omega values){p_end}
 
 {syntab:Inference}
 {synopt:{opt gu:nits(latent|pr)}}units of the user-supplied gamma values: {opt latent} (default, latent-index units) or {opt pr} (probability points; divided by m_phi from the baseline fit){p_end}
-{synopt:{opt level(#)}}confidence/credible level; default {cmd:level(.95)}{p_end}
+{synopt:{opt level(#)}}confidence level; default {cmd:level(.95)}{p_end}
 {synopt:{opt vce(}{it:vcetype}{cmd:)}}{it:vcetype} may be {opt robust} (default) or {opt cluster} {it:clustvar}{p_end}
 
 {syntab:Target selection (v0.11)}
@@ -90,9 +93,20 @@ coefficients -- to target the APE (probability scale) in
 {help cfprobit:cfprobit}.
 
 {pstd}
-With {opt aie(X Z)}, the same UCI/LTZ machinery instead targets the
-Average Interaction Effect for the continuous-by-continuous interaction
-{cmd:c.X##c.Z} (the AIE quantity reported by ginteff; Radean 2023).
+With {opt aie(X Z)} or a {opt target()} interaction spec, the same UCI/LTZ
+machinery instead targets the Average Interaction Effect (the AIE quantity
+reported by ginteff; Radean 2023).  All three interaction types are
+supported -- continuous x continuous (cross-partial), continuous x binary
+(first difference), and binary x binary (second discrete difference) -- with
+the type auto-detected from the data, or forced via the {cmd:c.}/{cmd:i.}
+prefixes in {opt target()}.
+
+{pstd}
+apexog does NOT require StataNow: it implements the control-function probit
+directly (regress/probit/fracreg/poisson plus Mata) and never calls
+{cmd:cfprobit} at runtime; the cfprobit comparisons live in the validation
+suite only.  Typing {cmd:apexog} without arguments after estimation replays
+the posted baseline estimates.
 
 {pstd}
 Two methods are available:
@@ -227,6 +241,20 @@ positive.
 {opt seed(#)} {hline 2} sets the random-number seed via {cmd:set seed}
 before drawing the gamma samples.  Use this for reproducibility.
 
+{phang}
+{opt graphomega(numlist)} [{opt graphmu(numlist)} {opt graphdelta(numlist)}]
+{hline 2} the DELTA SWEEP: after the main LTZ results, rerun the simulation
+for each prior variance in {opt graphomega()} (a single value per step,
+broadcast to all instruments; Gaussian priors only) and report the
+convolved CI and prior-only band per step -- the CHR (2012) Figures 1-2
+"bounds as a function of the prior width" display, for the FIRST target.
+Results are stored in {cmd:e(sweep)} (columns: delta mu lb ub lb_prior
+ub_prior); with {opt graph}, the sweep plot replaces the LTZ histogram.
+{opt graphmu()} sets per-step prior means (default zeros); {opt graphdelta()}
+relabels the x-axis (default: the omega values).  {opt gunits(pr)} applies
+to sweep values too.  Each step costs a full set of {opt iterations()}
+draws.
+
 {dlgtab:Inference}
 
 {phang}
@@ -333,7 +361,12 @@ when d is endogenous.  Prefer the explicit two-endog form above.{p_end}
 {title:Stored results}
 
 {pstd}
-{cmd:apexog} stores the following in {cmd:e()} (common to both methods):
+{cmd:apexog} is an estimation command: it posts {cmd:e(b)} (the baseline,
+gamma = 0, target estimates -- one APE per endogenous regressor, or the
+AIE), {cmd:e(V)} (their full Murphy-Topel delta-method covariance,
+cross-target terms included), and {cmd:e(sample)}.  {cmd:test},
+{cmd:lincom}, {cmd:estimates store}, {cmd:... if e(sample)}, and replay
+all work.  In addition it stores (common to both methods):
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
@@ -385,6 +418,7 @@ For {cmd:method = ltz}, also:
 {synopt:{cmd:e(ape_sim_cnv)}}{cmd:iterations x J} convolved draws APE_i + SE_i*eps_i (basis of the headline CI){p_end}
 {synopt:{cmd:e(lo_pct_vec)} / {cmd:e(hi_pct_vec)}}{cmd:J x 1} convolved percentile bounds (= {cmd:e(lb_*)}/{cmd:e(ub_*)}){p_end}
 {synopt:{cmd:e(lo_prior_vec)} / {cmd:e(hi_prior_vec)}}{cmd:J x 1} prior-only percentile bounds (sensitivity band){p_end}
+{synopt:{cmd:e(sweep)}}(with {opt graphomega()}) {cmd:S x 6} delta-sweep matrix: delta, mu, lb, ub, lb_prior, ub_prior (first target){p_end}
 
 
 {marker methods}{...}
