@@ -16,6 +16,31 @@ d   Inference uses a Murphy-Topel two-step sandwich computed in
 d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
 d   margins, dydx() to machine precision.
 d
+d   Features (v0.18.0):
+d     - input validation: 0/1 outcome check, disjoint variable lists,
+d       gmin<=gmax, first-stage support checks (probit 0/1, fprobit
+d       [0,1], poisson >=0), first-stage sample/control-function guards;
+d       level(95) accepted alongside level(.95); vce(cl id) abbreviations
+d       and string cluster ids; names unabbreviated; e(N_clust)/e(clustvar);
+d       full e(cmdline); replay honours level().  Fixes: debug crash
+d       (r(111)), uci+graph in AIE mode, 32-character name overflow for
+d       long endog names, if/in ignored by the instrument cleaning.
+d
+d   Features (v0.17.0):
+d     - gunits(structural): supply gamma values on the STRUCTURAL latent
+d       scale (total error variance 1); they are converted to probit-index
+d       units via sigma_tilde = (1 + b_cf' Var(chat) b_cf)^(-1/2) from the
+d       baseline fit.  Feeding a structural-units prior unrescaled is a
+d       scale miscalibration with wide-prior LTZ coverage 2*Phi(z*st)-1
+d       (~0.88 instead of 0.95 at endogeneity correlation 0.6).
+d       sigma_tilde always reported in the header and stored in e(stilde).
+d
+d   Features (v0.16.1):
+d     - UCI grid guard: grid^(#instruments) above c(max_matsize) now
+d       errors early with an actionable message (use ltz, fewer
+d       instruments, or a coarser grid) instead of a cryptic matsize
+d       failure
+d
 d   Features (v0.16.0):
 d     - estimation command proper: posts e(b) (baseline target estimates)
 d       with full cross-target Murphy-Topel e(V) and e(sample); test,
@@ -81,7 +106,7 @@ d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhu
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d License: MIT (https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE)
 d
-d Distribution-Date: 20260612
+d Distribution-Date: 20260909
 d
 f apexog.ado
 f apexog.sthlp

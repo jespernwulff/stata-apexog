@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.16.0  2026-06-12
+*! Version 0.18.0  2026-09-09
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,105 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.18.0 changelog (vs v0.17.0) -- input validation, robustness, housekeeping.
+*!   STATUS: VALIDATED 2026-09-09 on StataNow 19.5 SE.  Written 2026-09-04 as a
+*!   candidate while no licensed Stata was available, then run through the full
+*!   quick sanity suite (57 files; the 05/06/38/40/42/43/45/46/48 anchors
+*!   byte-identical, e.g. sanity 06 APE diff -1.14e-11 vs cfprobit + margins),
+*!   examples.do, apexog_showcase.do (every recorded anchor reproduced to the
+*!   last printed digit), the new tests 49-51, and the new coverage Monte Carlos
+*!   52-54 (cluster-robust 0.943; uniform prior 0.960; two-endog 0.955/0.945).
+*!   No numeric path (first stages, probit-with-offset, Mata Murphy-Topel
+*!   sandwich, APE/AIE Jacobians, LTZ convolution) was touched; every change
+*!   below is parsing, validation, display, or ereturn.
+*!   NOTE for white-box callers that drive _apexogfit standalone (sanity 37):
+*!   apexog now drops every _apexog* matrix and scalar at exit, so hand-set
+*!   _apexogIVMASK/_apexogEXOGMASK must be re-created after any apexog call.
+*!   Bug fixes:
+*!   - debug: _apexogfit crashed with r(111) at the end of every fit because
+*!     its last debug line read _apexogAPE_vec AFTER `return matrix' had moved
+*!     it into r().  (Sanity 05 was failing for exactly this reason.)
+*!   - uci + graph in AIE mode plotted nonexistent variables (the svmat columns
+*!     are aie_*, the twoway call asked for ape_*) -> r(111).
+*!   - e(cmdline) recorded only the positional part of the command; it now
+*!     holds the full command line including if/in and options.
+*!   - Long variable names: e(lb_<endog>)/e(ub_<endog>) and the matrix column
+*!     names ape_<endog> / aie_<X>_<Z> exceeded Stata's 32-character name limit
+*!     for long names and errored at the very END of the run.  Labels are now
+*!     truncated to fit (27 chars per endog, 13 per AIE interactor; a collision
+*!     falls back to endog<j>).  Short names are unaffected: e(lb_d), ape_d,
+*!     ... are exactly as before.
+*!   - Stale note "APE and SE are reported for the FIRST endog" (true only up
+*!     to v0.7) replaced.
+*!   New validation (each an explicit rc 198 message instead of a cryptic
+*!   downstream failure or -- worse -- a silently wrong answer):
+*!   - depvar must be coded 0/1 on the estimation sample.  Stata's probit
+*!     silently treats any nonzero value as 1, but apexog's Mata score used the
+*!     raw value, so a 0/2-coded outcome gave wrong Murphy-Topel SEs.
+*!   - depvar, controls, endogenous regressors, and instruments must be
+*!     disjoint (an endog among the controls; a regressor as its own IV).
+*!   - gmin() may not exceed gmax() for any instrument.
+*!   - firststage(probit) requires a 0/1 endog; fprobit one in [0,1]; poisson a
+*!     nonnegative one (probit on a continuous d used to die with r(2000)).
+*!   - a first stage that silently drops observations (perfect prediction in a
+*!     probit first stage) or yields an undefined control function (extreme
+*!     first-stage fitted values) now stops with a message; previously the
+*!     Mata views and the first-stage fit could be misaligned.
+*!   - the two AIE interactors must be distinct; `##' inside an endogenous
+*!     clause is rejected (write the interaction with a single # and list the
+*!     main effects separately).
+*!   Usability:
+*!   - level() also accepts Stata's percent form: level(95) == level(.95)
+*!     (e(level) stays a fraction, as before).
+*!   - vce() accepts the usual abbreviations (vce(r), vce(cl id)) and a STRING
+*!     cluster variable (grouped into a numeric id internally -- the Mata
+*!     views need a numeric id; a string id previously failed inside Mata).
+*!   - variable names are unabbreviated (fvunab/unab) before use, so
+*!     abbreviations work everywhere and misspelt names error up front.
+*!   - the estimation sample (if/in + missing values, incl. the cluster id) is
+*!     fixed ONCE, before the full-rank instrument cleaning, so the cleaning
+*!     and every fit see the same observations (the cleaning ignored if/in).
+*!   - notes when method-specific options are ignored (gmin/gmax with ltz;
+*!     mu/omega/distribution/seed with uci; cfinteract with one endog).
+*!   - replay accepts level(): `apexog, level(90)'.
+*!   ereturn additions: e(N_clust) and e(clustvar) with vce(cluster).
+*!   Housekeeping: the internal _apexog* matrices and scalars are dropped at
+*!   exit (all results live in e()); nothing the user owns is touched.
+*!
+*! v0.17.0 changelog (vs v0.16.1) -- structural-latent gamma units:
+*!   - New gunits(structural) value.  apexog's gamma lives in the PROBIT-INDEX
+*!     latent scale (unit CONDITIONAL error sd, given the control functions),
+*!     whereas a researcher reasoning about the structural latent equation
+*!     y* = xb + gamma*z + eps with TOTAL error variance 1 elicits gamma on a
+*!     scale that differs by exactly sigma_tilde = sd(eps | CF) =
+*!     (1 + b_cf' Var(chat) b_cf)^(-1/2), estimated from the baseline-fit
+*!     control-function coefficient(s) (for one CF with unit-variance
+*!     first-stage residual: (1 + theta_cf^2)^(-1/2)).  Feeding a
+*!     structural-units prior to the offset unrescaled is a scale
+*!     miscalibration c = sigma_tilde with closed-form wide-prior LTZ
+*!     coverage 2*Phi(z*c)-1 (~0.88 at rho = 0.6 instead of 0.95; Session 34).
+*!     With gunits(structural), all user gamma quantities (gmin/gmax,
+*!     mu/omega, distribution() draws, sweep values) are divided by the
+*!     estimated sigma_tilde (variances by sigma_tilde^2) after the baseline
+*!     fit, exactly mirroring the gunits(pr) machinery.  Exact for linear
+*!     first stages; for generalized-residual first stages (probit/fprobit/
+*!     poisson) sigma_tilde applies the same formula to the generalized
+*!     residual and is first-order.  cfinteract CF-product terms are ignored
+*!     in sigma_tilde (first-order in the CF coefficients).
+*!   - Both methods now always print the estimated sigma_tilde on a second
+*!     Scale: header line (next to the m_phi elicitation aid) so users can
+*!     diagnose the index-vs-structural units gap, and return e(stilde).
+*!     _apexogfit returns r(stilde).
+*!   - Default gunits(latent) remains byte-identical to v0.16.1.
+*!
+*! v0.16.1 changelog (vs v0.16.0) -- UCI grid guard:
+*!   - method uci now errors early (rc 908) with an actionable message when
+*!     the grid^(#instruments) point count exceeds c(max_matsize), instead
+*!     of dying in the J() allocation with a cryptic matsize error.  The
+*!     message points to lowering grid(), using fewer instruments, or
+*!     switching to method ltz (which uses draws, not a grid).  No change to
+*!     any in-range path.
 *!
 *! v0.16.0 changelog (vs v0.15.0) -- proper e() posting, guards, delta sweep:
 *!   - e(b)/e(V)/e(sample) now POSTED: e(b) holds the baseline (gamma=0)
@@ -288,16 +387,25 @@
 cap program drop apexog
 cap program drop _apexogfit
 cap program drop _apexogerr
+cap program drop _apexogclean
 
 program apexog, eclass
     version 18
     * Replay: `apexog' (no arguments) after estimation redisplays e(b)/e(V).
     if replay() {
         if "`e(cmd)'" != "apexog" error 301
+        syntax [, level(real -1)]
+        local _rlvl ""
+        if `level' > 0 {
+            if `level' < 1 local level = 100*`level'
+            local _rlvl "level(`level')"
+        }
         di as text "apexog `e(method)' (replay): baseline (gamma=0) target estimates"
-        ereturn display
+        ereturn display, `_rlvl'
         exit
     }
+    * Full command line (before `syntax' consumes it), for e(cmdline).
+    local _cmdline_full `"`0'"'
     #delimit ;
     syntax anything(name=0 id="variable list")
     [if] [in]
@@ -351,20 +459,35 @@ program apexog, eclass
     if "`method'" != "uci" & "`method'" != "ltz" {
         _apexogerr "Method must be either 'uci' or 'ltz'.  You typed: '`method''."
     }
+    * level(): accept apexog's native fraction form level(.95) AND Stata's
+    * percent form level(95).  e(level) always stores the fraction.
+    if `level' >= 1 & `level' < 100 local level = `level'/100
     if `level' <= 0 | `level' >= 1 {
-        _apexogerr "Confidence level must be in (0,1); you gave level(`level')."
+        _apexogerr "Confidence level must be in (0,1) (or 1-99.99 as a percent); you gave level(`level')."
     }
     if "`gunits'" == "probability" local gunits "pr"
+    if "`gunits'" == "index"       local gunits "latent"
     if "`gunits'" == ""            local gunits "latent"
-    if "`gunits'" != "latent" & "`gunits'" != "pr" {
-        _apexogerr "gunits() must be latent (default) or pr.  You typed: gunits(`gunits')."
+    if !inlist("`gunits'", "latent", "pr", "structural") {
+        _apexogerr "gunits() must be latent (default; synonym index), pr, or structural.  You typed: gunits(`gunits')."
     }
     if "`graphomega'`graphmu'`graphdelta'" != "" & "`method'" != "ltz" {
         _apexogerr "graphomega()/graphmu()/graphdelta() (the delta sweep) require method ltz."
     }
+    if "`method'" == "ltz" & "`gmin'`gmax'" != "" {
+        di as text "  [note] gmin()/gmax() are UCI options; ignored with method ltz."
+    }
+    if "`method'" == "uci" & "`mu'`omega'`distribution'`seed'" != "" {
+        di as text "  [note] mu()/omega()/distribution()/seed() are LTZ options; ignored with method uci."
+    }
 
     local yvar `1'
     macro shift
+    if "`yvar'" == "" | "`yvar'" == "(" {
+        _apexogerr "No dependent variable found.  Use: METHOD depvar [exog] (endog = iv) [, opts]"
+    }
+    unab yvar : `yvar'
+    confirm numeric variable `yvar'
 
     * Exog vars: everything from after yvar up to the first "(".
     local varlist1
@@ -431,6 +554,9 @@ program apexog, eclass
         foreach _tok of local endog_`n_clauses' {
             local ++_pos
             if strpos("`_tok'", "#") {
+                if strpos("`_tok'", "##") {
+                    _apexogerr "Use a single # for an interaction endogenous regressor (e.g. c.d#c.X) and list the main effects separately; got `_tok'."
+                }
                 local _opnd : subinstr local _tok "#" " ", all
                 local _nop : word count `_opnd'
                 if `_nop' != 2 {
@@ -492,10 +618,13 @@ program apexog, eclass
         }
         local endog_`n_clauses' : list clean _stripped_endog
 
-        * Expand factor-variable lists (now on the bare names)
-        fvexpand `endog_`n_clauses''
+        * Expand factor-variable lists (now on the bare names).  fvunab first:
+        * abbreviated names resolve and nonexistent names error up front.
+        fvunab _endog_ua : `endog_`n_clauses''
+        fvexpand `_endog_ua'
         local endog_`n_clauses' `r(varlist)'
-        fvexpand `iv_`n_clauses''
+        fvunab _iv_ua : `iv_`n_clauses''
+        fvexpand `_iv_ua'
         local iv_`n_clauses' `r(varlist)'
 
         local all_endog `all_endog' `endog_`n_clauses''
@@ -505,7 +634,10 @@ program apexog, eclass
         _apexogerr "No clauses found.  Use: METHOD yvar [exog] (endog = iv) [, opts]"
     }
 
-    * Expand exog
+    * Expand exog (fvunab first: abbreviations resolve, bad names error early)
+    if "`varlist1'" != "" {
+        fvunab varlist1 : `varlist1'
+    }
     fvexpand `varlist1'
     local varlist1 `r(varlist)'
 
@@ -516,6 +648,27 @@ program apexog, eclass
     local count1   : word count `varlist1'
     local count2   : word count `varlist2'
     local count_iv : word count `varlist_iv'
+
+    * Guard: depvar, endogenous regressors, controls, and instruments must be
+    * disjoint -- an endog among the controls, or a regressor doubling as its
+    * own instrument, would otherwise surface only as a cryptic collinearity
+    * failure deep inside the fit.  (An instrument that merely duplicates a
+    * control, e.g. a ## main effect, is handled by the full-rank cleaning
+    * below with a note, as before.)
+    local _yin_x : list yvar in varlist1
+    local _yin_d : list yvar in varlist2
+    local _yin_z : list yvar in varlist_iv
+    if `_yin_x' | `_yin_d' | `_yin_z' {
+        _apexogerr "The dependent variable `yvar' also appears among the regressors or instruments."
+    }
+    local _ovl : list varlist2 & varlist1
+    if "`_ovl'" != "" {
+        _apexogerr "Variable(s) listed as both endogenous and exogenous regressor: `_ovl'."
+    }
+    local _ovl : list varlist2 & varlist_iv
+    if "`_ovl'" != "" {
+        _apexogerr "Variable(s) listed as both endogenous regressor and instrument: `_ovl'."
+    }
 
     * Build per-endog: which clause does this endog belong to, hence its IV list,
     * cfopts (first-stage type), and Phase-1 i./c. type prefix.  Endogs in
@@ -563,10 +716,59 @@ program apexog, eclass
     *      `ivlabels' keeps the original term names for display/ereturn.  This is
     *      a no-op for already-clean continuous instruments.
     *==========================================================================
+    *--- (1a) Parse vce() -- BEFORE the estimation sample is marked, so that a
+    *    missing cluster id is excluded from the sample used by the instrument
+    *    cleaning and by every fit alike.  Accept vce(robust) [default] and
+    *    vce(cluster <varname>), with the usual abbreviations (vce(r),
+    *    vce(cl id)).  A STRING cluster id is grouped into a numeric tempvar
+    *    (the Mata views need a numeric id).
+    if "`vce'" == "" local vce "robust"
+    local vcefirst  : word 1 of `vce'
+    local vcesecond : word 2 of `vce'
+    local vcethird  : word 3 of `vce'
+    local clustvar_name ""
+    if "`vcethird'" != "" {
+        _apexogerr "vce() must be robust or 'cluster <varname>'.  You gave: `vce'."
+    }
+    if "`vcefirst'" == substr("robust", 1, max(1, length("`vcefirst'"))) {
+        if "`vcesecond'" != "" _apexogerr "vce(robust) takes no argument.  You gave: `vce'."
+        local vcetype  = "robust"
+        local clustvar = ""
+    }
+    else if "`vcefirst'" == substr("cluster", 1, max(2, length("`vcefirst'"))) {
+        if "`vcesecond'" == "" {
+            _apexogerr "vce(cluster ...) requires a cluster variable name."
+        }
+        unab vcesecond : `vcesecond'
+        local clustvar_name "`vcesecond'"
+        capture confirm numeric variable `vcesecond'
+        if _rc {
+            tempvar _clnum
+            qui egen long `_clnum' = group(`vcesecond')
+            local clustvar "`_clnum'"
+        }
+        else local clustvar "`vcesecond'"
+        local vcetype  = "cluster"
+    }
+    else if "`vcefirst'" == "bootstrap" {
+        _apexogerr "vce(bootstrap) is not supported directly.  Wrap apexog in" /*
+            */ " Stata's `bootstrap' prefix instead:" /*
+            */ "   bootstrap, reps(500): apexog uci y X (d=Z), gmin(-0.3) gmax(0.3)" /*
+            */ " (MT SEs are asymptotically equivalent to bootstrap; this is mainly" /*
+            */ " useful for finite-sample inference.)"
+    }
+    else {
+        _apexogerr "vce() must be robust or 'cluster <varname>'.  You gave: `vce'."
+    }
+
     local _raw_iv_n : word count `varlist_iv'
-    tempvar _cl_touse
-    qui gen byte `_cl_touse' = 1
-    markout `_cl_touse' `yvar' `varlist1' `varlist2' `varlist_iv' `aieendog_tempvar'
+    * The estimation sample (if/in + missing values in every variable used,
+    * incl. the cluster id) is fixed HERE, once, so the instrument cleaning
+    * below and every fit afterwards see exactly the same observations.
+    marksample touse
+    markout `touse' `yvar' `varlist1' `varlist2' `varlist_iv' `aieendog_tempvar' `clustvar'
+    qui count if `touse'
+    if r(N) == 0 _apexogerr "No observations remain after if/in and missing-data filtering."
     * exog controls as plain tempvars (collinearity baseline)
     local _ctrl_tv ""
     foreach _c of local varlist1 {
@@ -588,7 +790,7 @@ program apexog, eclass
             local _cand_names `_cand_names' `_t'
             local _cand_tv    `_cand_tv' `_cc'
         }
-        qui _rmcoll `_ctrl_tv' `_cand_tv' if `_cl_touse'
+        qui _rmcoll `_ctrl_tv' `_cand_tv' if `touse'
         local _surv `r(varlist)'
         local _ivj ""
         local _ii = 0
@@ -813,7 +1015,9 @@ program apexog, eclass
                 local _right_pfx "c"
                 local _right_bare = substr("`_right'", 3, .)
             }
-            * Validate both are in the regressor set.
+            * Validate both are in the regressor set (unabbreviate first).
+            unab _left_bare  : `_left_bare'
+            unab _right_bare : `_right_bare'
             local _allvars `varlist1' `varlist2'
             local _xin : list _left_bare in _allvars
             local _zin : list _right_bare in _allvars
@@ -843,6 +1047,7 @@ program apexog, eclass
                 local _bare "`_spec'"
                 if substr("`_spec'", 1, 2) == "i." local _bare = substr("`_spec'", 3, .)
                 if substr("`_spec'", 1, 2) == "c." local _bare = substr("`_spec'", 3, .)
+                capture unab _bare : `_bare'
                 local _matched = 0
                 local _k = 0
                 foreach _e of local varlist2 {
@@ -874,33 +1079,7 @@ program apexog, eclass
         _apexogerr "Internal: no active APE targets after parsing target() option."
     }
 
-    *--- Parse vce() ----------------------------------------------------------
-    * Accept: vce(robust) [default], vce(cluster <varname>)
-    if "`vce'" == "" local vce "robust"
-    local vcefirst  : word 1 of `vce'
-    local vcesecond : word 2 of `vce'
-    if "`vcefirst'" == "robust" {
-        local vcetype  = "robust"
-        local clustvar = ""
-    }
-    else if "`vcefirst'" == "cluster" {
-        if "`vcesecond'" == "" {
-            _apexogerr "vce(cluster ...) requires a cluster variable name."
-        }
-        confirm variable `vcesecond'
-        local vcetype  = "cluster"
-        local clustvar = "`vcesecond'"
-    }
-    else if "`vcefirst'" == "bootstrap" {
-        _apexogerr "vce(bootstrap) is not supported directly.  Wrap apexog in" /*
-            */ " Stata's `bootstrap' prefix instead:" /*
-            */ "   bootstrap, reps(500): apexog uci y X (d=Z), gmin(-0.3) gmax(0.3)" /*
-            */ " (MT SEs are asymptotically equivalent to bootstrap; this is mainly" /*
-            */ " useful for finite-sample inference.)"
-    }
-    else {
-        _apexogerr "vce() must be robust or 'cluster <varname>'.  You gave: `vce'."
-    }
+    *--- vce() is parsed in step (1a) above, before the sample is marked. ------
 
     if `count2' < 1 {
         _apexogerr "At least one endogenous regressor required."
@@ -926,6 +1105,11 @@ program apexog, eclass
         foreach n of numlist `gmax' {
             local gmax`k' = `n'
             local ++k
+        }
+        forvalues k = 1/`count_iv' {
+            if `gmin`k'' > `gmax`k'' {
+                _apexogerr "gmin() must not exceed gmax(): instrument `k' has gmin = `gmin`k'' > gmax = `gmax`k''."
+            }
         }
         if `grid' < 2 _apexogerr "grid() must be at least 2."
     }
@@ -1061,11 +1245,22 @@ program apexog, eclass
     *==========================================================================
     * (3) Determine the estimation sample
     *==========================================================================
-    marksample touse
-    markout `touse' `yvar' `varlist1' `varlist2' `varlist_iv' `aieendog_tempvar' `clustvar'
+    * (`touse' was fixed in step (1b): if/in + missing values, incl. the
+    *  cluster id, so the cleaning and the fits share one sample.)
     qui count if `touse'
     local N = r(N)
     if `N' == 0 _apexogerr "No observations remain after if/in and missing-data filtering."
+    * Guard: the outcome must be coded 0/1.  Stata's probit treats any nonzero
+    * value as a positive outcome, but the Mata score uses the raw value, so a
+    * differently coded outcome would give silently wrong two-step SEs.
+    qui count if `touse' & !inlist(`yvar', 0, 1)
+    if r(N) > 0 {
+        local _nbad = r(N)
+        _apexogerr "Dependent variable `yvar' takes values other than 0/1 in `_nbad' observation(s) of the estimation sample.  Recode it first, e.g. gen byte y01 = (`yvar' != 0)."
+    }
+    if "`vcetype'" == "cluster" {
+        mata: st_numscalar("_apexogNCLUST", rows(uniqrows(st_data(., "`clustvar'", "`touse'"))))
+    }
 
     *==========================================================================
     * (3b) Process aie() option, if specified.
@@ -1117,8 +1312,13 @@ program apexog, eclass
             local _aie_Z_pfx "`target_aie_Z_pfx'"
             local aie_source "target(`target_aie_spec')"
         }
+        unab aie_X : `aie_X'
+        unab aie_Z : `aie_Z'
         confirm numeric variable `aie_X'
         confirm numeric variable `aie_Z'
+        if "`aie_X'" == "`aie_Z'" {
+            _apexogerr "The two AIE interactors must be distinct variables; got `aie_X' twice."
+        }
 
         * Validate both interactors are somewhere in the regressor set.
         local _allvars `varlist1' `varlist2'
@@ -1206,6 +1406,29 @@ program apexog, eclass
     if "`cfinteract'" != "" local do_cfinteract = 1
     if `aie_xz_is_endog'    local do_cfinteract = 1
     if `count2' < 2         local do_cfinteract = 0
+    if "`cfinteract'" != "" & `count2' < 2 {
+        di as text "  [note] cfinteract needs at least two endogenous regressors; ignored."
+    }
+
+    *==========================================================================
+    * Short labels for matrix column names and e(lb_*)/e(ub_*) scalar names.
+    * Stata names are capped at 32 characters, so a long endog/interactor name
+    * would otherwise error at the very end of the run.  Short names are
+    * unchanged (e(lb_d), ape_d, aie_X_Z, ... exactly as before).
+    *==========================================================================
+    local _all_labs ""
+    local j = 0
+    foreach endogvar of local varlist2 {
+        local ++j
+        local _lab_`j' = substr("`endogvar'", 1, 27)
+        local _dup : list posof "`_lab_`j''" in _all_labs
+        if `_dup' > 0 local _lab_`j' "endog`j'"
+        local _all_labs "`_all_labs' `_lab_`j''"
+    }
+    if `aie_active' {
+        local _labX = substr("`aie_X'", 1, 13)
+        local _labZ = substr("`aie_Z'", 1, 13)
+    }
 
     *==========================================================================
     * (4) Run the first stage ONCE (does not depend on gamma).  Save:
@@ -1245,6 +1468,21 @@ program apexog, eclass
         local ++j
         tempvar chat0_`j' Wpi_`j' A_`j'
         local fst = "`firststage_`j''"
+        * Guard: the first-stage model must suit the endog's support (probit on
+        * a continuous variable used to die with r(2000) "outcome does not
+        * vary", since probit treats every nonzero value as 1).
+        if "`fst'" == "probit" {
+            qui count if `touse' & !inlist(`dj', 0, 1)
+            if r(N) > 0 _apexogerr "firststage(probit) requires a 0/1 endogenous regressor, but `dj' has other values (use fprobit for a fractional or linear for a continuous variable)."
+        }
+        else if "`fst'" == "fprobit" {
+            qui count if `touse' & (`dj' < 0 | `dj' > 1)
+            if r(N) > 0 _apexogerr "firststage(fprobit) requires an endogenous regressor in [0,1], but `dj' has values outside that range."
+        }
+        else if "`fst'" == "poisson" {
+            qui count if `touse' & `dj' < 0
+            if r(N) > 0 _apexogerr "firststage(poisson) requires a nonnegative endogenous regressor, but `dj' has negative values."
+        }
         if "`fst'" == "linear" {
             qui regress `dj' `iv_for_endog_`j'' `exog_for_endog_`j'' if `touse', `vce_opt'
             qui predict double `chat0_`j'' if `touse', residuals
@@ -1272,6 +1510,20 @@ program apexog, eclass
             qui predict double `Wpi_`j'' if `touse', xb
             qui gen double `chat0_`j'' = `dj' - exp(`Wpi_`j'') if `touse'
             qui gen double `A_`j''     = exp(`Wpi_`j'') if `touse'
+        }
+        * Guard: the first stage must have used the full estimation sample (a
+        * probit first stage drops observations under perfect prediction) and
+        * the control function must be defined everywhere; otherwise the Mata
+        * views (built on the full sample) and the first-stage fit would be
+        * misaligned and the two-step variance would be wrong.
+        if e(N) < `N' {
+            local _nfs = e(N)
+            _apexogerr "The `fst' first stage for `dj' used `_nfs' of `N' observations (perfect prediction or dropped groups); apexog cannot proceed with a misaligned first stage."
+        }
+        qui count if `touse' & missing(`chat0_`j'')
+        if r(N) > 0 {
+            local _nmis = r(N)
+            _apexogerr "The control function for `dj' is undefined in `_nmis' observation(s) (extreme first-stage fitted values); apexog cannot proceed."
         }
         local chat0_list `chat0_list' `chat0_`j''
         local A_list     `A_list'     `A_`j''
@@ -1307,7 +1559,7 @@ program apexog, eclass
     if `count2' > 1 {
         di as text "  [note] `count2' endogenous regressors detected.  All get a CF in the" /*
             */ " main probit; the MT correction accumulates uncertainty from all first stages." /*
-            */ "  APE and SE are reported for the FIRST endog (`dvar')."
+            */ "  Bounds are reported for every endog (or those named in target())."
     }
 
     if "`debug'" != "" {
@@ -1402,15 +1654,33 @@ program apexog, eclass
     *      gamma-free) and BEFORE the UCI/LTZ loops.  The conversion is
     *      first-order (exact as gamma -> 0).  Everything downstream --
     *      offsets, e(grid), graphs, displayed gamma values -- is latent.
+    *
+    *      With gunits(structural), user gamma quantities are on the
+    *      STRUCTURAL latent scale (total error variance 1, the scale a
+    *      researcher elicits when reasoning about y* = xb + gamma*z + eps
+    *      with sd(eps) = 1) and are divided by sigma_tilde = sd(eps | CF) =
+    *      (1 + b_cf' Var(chat) b_cf)^(-1/2), estimated at the baseline fit.
+    *      The probit index normalizes the CONDITIONAL error to 1, so index
+    *      quantities = structural quantities / sigma_tilde.  Same machinery
+    *      as gunits(pr) with a different conversion factor.
     *==========================================================================
-    scalar _apexogMPHI0 = r(mphi)
+    scalar _apexogMPHI0   = r(mphi)
+    scalar _apexogSTILDE0 = r(stilde)
     * Cross-target MT covariance of the baseline estimates (for ereturn post)
     matrix _apexogVTGT0 = r(vtgt)
-    if "`gunits'" == "pr" {
-        if _apexogMPHI0 >= . {
-            _apexogerr "gunits(pr) needs m_phi from a successful baseline fit, but the baseline failed."
+    if "`gunits'" == "pr" | "`gunits'" == "structural" {
+        if "`gunits'" == "pr" {
+            if _apexogMPHI0 >= . {
+                _apexogerr "gunits(pr) needs m_phi from a successful baseline fit, but the baseline failed."
+            }
+            local _ginv : di %21.15g 1/scalar(_apexogMPHI0)
         }
-        local _ginv : di %21.15g 1/scalar(_apexogMPHI0)
+        else {
+            if _apexogSTILDE0 >= . {
+                _apexogerr "gunits(structural) needs sigma_tilde from a successful baseline fit, but the baseline failed."
+            }
+            local _ginv : di %21.15g 1/scalar(_apexogSTILDE0)
+        }
         if "`method'" == "uci" {
             forvalues k = 1/`count_iv' {
                 local gmin`k' = `gmin`k'' * `_ginv'
@@ -1442,6 +1712,18 @@ program apexog, eclass
     *==========================================================================
     if "`method'" == "uci" {
         local total_pts = `grid'^`count_iv'
+        * Guard the curse of dimensionality: the UCI grid is grid^(#instruments)
+        * and is stored in a Stata matrix capped at c(max_matsize) rows (11000
+        * in Stata/SE).  Past that the J() allocation dies with a cryptic
+        * matsize error.  Catch it early with an actionable message: coarsen
+        * the grid, drop instruments, or use the draw-based LTZ (no grid).
+        if `total_pts' > c(max_matsize) {
+            di as error "UCI grid has `total_pts' points (grid(`grid')^`count_iv' instruments), " ///
+                "above the matrix limit c(max_matsize) = `c(max_matsize)'."
+            di as error "This is the CHR UCI curse of dimensionality.  Options: lower grid(), " ///
+                "reduce the number of instruments, or use method ltz (draws, no grid)."
+            exit 908
+        }
         di as text _newline "Running UCI grid: `grid' point(s) per instrument, " /*
             */ "`count_iv' instrument(s), `total_pts' total grid point(s)."
 
@@ -1461,9 +1743,9 @@ program apexog, eclass
         forvalues k = 1/`count_iv' {
             local colnames "`colnames' g`k'"
         }
-        foreach tlabel of local target_labels {
-            if `aie_active' local colnames "`colnames' aie_`aie_X'_`aie_Z' lo_`aie_X'_`aie_Z' hi_`aie_X'_`aie_Z'"
-            else            local colnames "`colnames' ape_`tlabel' lo_`tlabel' hi_`tlabel'"
+        forvalues j = 1/`n_targets' {
+            if `aie_active' local colnames "`colnames' aie_`_labX'_`_labZ' lo_`_labX'_`_labZ' hi_`_labX'_`_labZ'"
+            else            local colnames "`colnames' ape_`_lab_`j'' lo_`_lab_`j'' hi_`_lab_`j''"
         }
         matrix colnames _apexogGRID = `colnames'
 
@@ -1576,9 +1858,16 @@ program apexog, eclass
             di as text " "
             di as text "Scale:     1 latent-index unit of gamma = " %6.4f scalar(_apexogMPHI0) ///
                 " pr. points per unit of Z (avg., baseline)"
+            di as text "           1 structural-latent unit of gamma = " ///
+                %6.4f 1/scalar(_apexogSTILDE0) " latent-index units" ///
+                "  (sigma_tilde = " %6.4f scalar(_apexogSTILDE0) ")"
             if "`gunits'" == "pr" {
                 di as text "           gunits(pr): user gamma values were probability points;" ///
                     " divided by m_phi.  Values below are latent units."
+            }
+            if "`gunits'" == "structural" {
+                di as text "           gunits(structural): user gamma values were structural-latent" ///
+                    " units; divided by sigma_tilde.  Values below are latent-index units."
             }
             di as text " "
             di as text "UCI union over gamma grid (`grid' point(s) per IV):"
@@ -1610,26 +1899,27 @@ program apexog, eclass
             sort g1
             local zname : word 1 of `ivlabels'
             if `aie_active' {
-                local _ape_lab "ape_`aie_X'_`aie_Z'"
-                local _lo_lab  "lo_`aie_X'_`aie_Z'"
-                local _hi_lab  "hi_`aie_X'_`aie_Z'"
+                * (v0.18 fix: the svmat columns are aie_*, not ape_*)
+                local _ape_lab "aie_`_labX'_`_labZ'"
+                local _lo_lab  "lo_`_labX'_`_labZ'"
+                local _hi_lab  "hi_`_labX'_`_labZ'"
                 local _title   "UCI AIE bounds vs assumed gamma_`zname'"
                 local _ytitle  "AIE (probability scale)"
             }
             else {
-                local zfirst : word 1 of `varlist2'
-                local _ape_lab "ape_`zfirst'"
-                local _lo_lab  "lo_`zfirst'"
-                local _hi_lab  "hi_`zfirst'"
+                local _ape_lab "ape_`_lab_1'"
+                local _lo_lab  "lo_`_lab_1'"
+                local _hi_lab  "hi_`_lab_1'"
                 local _title   "UCI APE bounds vs assumed gamma_`zname'"
                 local _ytitle  "APE (probability scale)"
             }
+            local _lvlg = `level'*100
             if `"`graphoptions'"' == "" {
                 local graphoptions ///
                     title("`_title'") ///
                     ytitle("`_ytitle'")                               ///
                     xtitle("gamma_`zname'")                            ///
-                    legend(order(1 "Lower 95% CI" 2 "Upper 95% CI" 3 "Point estimate"))
+                    legend(order(1 "Lower `_lvlg'% CI" 2 "Upper `_lvlg'% CI" 3 "Point estimate"))
             }
             twoway (line `_lo_lab' g1, lpattern(dash) lcolor(black))   ///
                    (line `_hi_lab' g1, lpattern(dash) lcolor(black))   ///
@@ -1674,6 +1964,7 @@ program apexog, eclass
         }
         ereturn scalar level         = `level'
         ereturn scalar mphi          = scalar(_apexogMPHI0)
+        ereturn scalar stilde        = scalar(_apexogSTILDE0)
         ereturn local  gunits        "`gunits'"
         ereturn scalar baseline_ape  = `baseline_ape'
         ereturn scalar baseline_se   = `baseline_se'
@@ -1689,16 +1980,16 @@ program apexog, eclass
             * used (Phase 1: respect target() exclusions; legacy callers that
             * don't use target() get the back-compat scalars as before).
             if "`target'" == "" {
-                ereturn scalar lb_`dvar'     = `lo_union'
-                ereturn scalar ub_`dvar'     = `hi_union'
+                ereturn scalar lb_`_lab_1'   = `lo_union'
+                ereturn scalar ub_`_lab_1'   = `hi_union'
             }
             * Per-endog scalars -- only for targets (Phase 1: skip non-targets)
             local j = 0
             foreach endogvar of local varlist2 {
                 local ++j
                 if !`target_endog_`j'' continue
-                ereturn scalar lb_`endogvar' = `lo_union_`j''
-                ereturn scalar ub_`endogvar' = `hi_union_`j''
+                ereturn scalar lb_`_lab_`j'' = `lo_union_`j''
+                ereturn scalar ub_`_lab_`j'' = `hi_union_`j''
             }
         }
         ereturn matrix grid               = _apexogGRID
@@ -1716,7 +2007,7 @@ program apexog, eclass
             ereturn local target_list     "`target_list'"
         }
         ereturn local cmd            "apexog"
-        ereturn local cmdline        `"apexog `0_raw'"'
+        ereturn local cmdline        `"apexog `_cmdline_full'"'
         ereturn local method         "uci"
         ereturn local estimator      "cfprobit"
         ereturn local firststage     "`firststage'"
@@ -1725,6 +2016,10 @@ program apexog, eclass
         ereturn local endog          "`varlist2'"
         ereturn local exog           "`varlist1'"
         ereturn local instruments    "`ivlabels'"
+        if "`vcetype'" == "cluster" {
+            ereturn scalar N_clust = scalar(_apexogNCLUST)
+            ereturn local  clustvar "`clustvar_name'"
+        }
     }
 
     *==========================================================================
@@ -1742,11 +2037,11 @@ program apexog, eclass
         matrix _apexogSESIM  = J(`iterations', `n_targets', .)
         local sim_colnames ""
         if `aie_active' {
-            local sim_colnames "aie_`aie_X'_`aie_Z'"
+            local sim_colnames "aie_`_labX'_`_labZ'"
         }
         else {
-            foreach endogvar of local varlist2 {
-                local sim_colnames "`sim_colnames' ape_`endogvar'"
+            forvalues j = 1/`count2' {
+                local sim_colnames "`sim_colnames' ape_`_lab_`j''"
             }
         }
         matrix colnames _apexogAPESIM = `sim_colnames'
@@ -1761,6 +2056,10 @@ program apexog, eclass
                 local gammaCall`k' = "`_apexogDONOR'[ceil(runiform()*`_apexog_nrows'), `k']"
                 if "`gunits'" == "pr" {
                     local _ginv : di %21.15g 1/scalar(_apexogMPHI0)
+                    local gammaCall`k' = "(`gammaCall`k'')*(`_ginv')"
+                }
+                else if "`gunits'" == "structural" {
+                    local _ginv : di %21.15g 1/scalar(_apexogSTILDE0)
                     local gammaCall`k' = "(`gammaCall`k'')*(`_ginv')"
                 }
             }
@@ -1853,9 +2152,16 @@ program apexog, eclass
             di as text " "
             di as text "Scale:     1 latent-index unit of gamma = " %6.4f scalar(_apexogMPHI0) ///
                 " pr. points per unit of Z (avg., baseline)"
+            di as text "           1 structural-latent unit of gamma = " ///
+                %6.4f 1/scalar(_apexogSTILDE0) " latent-index units" ///
+                "  (sigma_tilde = " %6.4f scalar(_apexogSTILDE0) ")"
             if "`gunits'" == "pr" {
                 di as text "           gunits(pr): user gamma values were probability points;" ///
                     " divided by m_phi.  Values below are latent units."
+            }
+            if "`gunits'" == "structural" {
+                di as text "           gunits(structural): user gamma values were structural-latent" ///
+                    " units; divided by sigma_tilde.  Values below are latent-index units."
             }
             di as text " "
             di as text "LTZ prior:"
@@ -1948,6 +2254,11 @@ program apexog, eclass
                     local om_use = `om_s' * (`_ginvs')^2
                     local mu_use = `mu_s' * `_ginvs'
                 }
+                else if "`gunits'" == "structural" {
+                    local _ginvs : di %21.15g 1/scalar(_apexogSTILDE0)
+                    local om_use = `om_s' * (`_ginvs')^2
+                    local mu_use = `mu_s' * `_ginvs'
+                }
                 local sd_s = sqrt(`om_use')
                 matrix _apexogSWAPE = J(`iterations', 1, .)
                 matrix _apexogSWSE  = J(`iterations', 1, .)
@@ -1990,7 +2301,8 @@ program apexog, eclass
             clear
             svmat _apexogSWEEP, names(col)
             local _xunits ""
-            if "`gunits'" == "pr" local _xunits " (pr units)"
+            if "`gunits'" == "pr"         local _xunits " (pr units)"
+            if "`gunits'" == "structural" local _xunits " (structural units)"
             if `"`graphoptions'"' == "" {
                 local graphoptions ///
                     title("LTZ bounds vs prior width")                          ///
@@ -2015,14 +2327,14 @@ program apexog, eclass
             clear
             svmat _apexogSIMCNV, names(col)
             if `aie_active' {
-                local _histvar "aie_`aie_X'_`aie_Z'"
+                local _histvar "aie_`_labX'_`_labZ'"
                 local _title   "LTZ AIE distribution across `iterations' draws"
                 local _subt    "Interaction: `aie_X' ## `aie_Z'"
                 local _xt      "AIE (probability scale)"
             }
             else {
                 local zfirst : word 1 of `varlist2'
-                local _histvar "ape_`zfirst'"
+                local _histvar "ape_`_lab_1'"
                 local _title   "LTZ APE distribution across `iterations' draws"
                 local _subt    "First endog: `zfirst'"
                 local _xt      "APE (probability scale)"
@@ -2077,6 +2389,7 @@ program apexog, eclass
         ereturn scalar baseline_ape  = `baseline_ape'
         ereturn scalar baseline_se   = `baseline_se'
         ereturn scalar mphi          = scalar(_apexogMPHI0)
+        ereturn scalar stilde        = scalar(_apexogSTILDE0)
         ereturn local  gunits        "`gunits'"
         if `n_sweep' > 0 {
             ereturn matrix sweep = _apexogSWEEP
@@ -2092,8 +2405,8 @@ program apexog, eclass
             * Back-compat: first endog scalars.  Only set when target() was NOT
             * used (Phase 1: respect target() exclusions).
             if "`target'" == "" {
-                ereturn scalar lb_`dvar'     = `lo_pct'
-                ereturn scalar ub_`dvar'     = `hi_pct'
+                ereturn scalar lb_`_lab_1'   = `lo_pct'
+                ereturn scalar ub_`_lab_1'   = `hi_pct'
             }
             * Per-endog scalars -- only for targets (Phase 1: skip non-targets)
             local j = 0
@@ -2102,8 +2415,8 @@ program apexog, eclass
                 if !`target_endog_`j'' continue
                 scalar _apexogLO_temp = _apexogLO_PCT[`j', 1]
                 scalar _apexogHI_temp = _apexogHI_PCT[`j', 1]
-                ereturn scalar lb_`endogvar' = _apexogLO_temp
-                ereturn scalar ub_`endogvar' = _apexogHI_temp
+                ereturn scalar lb_`_lab_`j'' = _apexogLO_temp
+                ereturn scalar ub_`_lab_`j'' = _apexogHI_temp
             }
         }
         ereturn matrix ape_sim       = _apexogAPESIM
@@ -2124,7 +2437,7 @@ program apexog, eclass
             ereturn local target_list "`target_list'"
         }
         ereturn local cmd            "apexog"
-        ereturn local cmdline        `"apexog `0_raw'"'
+        ereturn local cmdline        `"apexog `_cmdline_full'"'
         ereturn local method         "ltz"
         ereturn local estimator      "cfprobit"
         ereturn local firststage     "`firststage'"
@@ -2133,7 +2446,17 @@ program apexog, eclass
         ereturn local endog          "`varlist2'"
         ereturn local exog           "`varlist1'"
         ereturn local instruments    "`ivlabels'"
+        if "`vcetype'" == "cluster" {
+            ereturn scalar N_clust = scalar(_apexogNCLUST)
+            ereturn local  clustvar "`clustvar_name'"
+        }
     }
+
+    *==========================================================================
+    * (9) Housekeeping: drop the internal _apexog* matrices and scalars left in
+    *     the session (all results live in e()); user objects are untouched.
+    *==========================================================================
+    _apexogclean
 end
 
 *==============================================================================
@@ -2196,6 +2519,7 @@ program _apexogfit, rclass
         return scalar lo      = .
         return scalar hi      = .
         return scalar mphi    = .
+        return scalar stilde  = .
         matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
         return matrix vtgt    = _apexogVTGT
         exit
@@ -2237,6 +2561,7 @@ program _apexogfit, rclass
         return scalar lo      = .
         return scalar hi      = .
         return scalar mphi    = .
+        return scalar stilde  = .
         matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
         return matrix vtgt    = _apexogVTGT
         exit
@@ -2273,6 +2598,7 @@ program _apexogfit, rclass
         return scalar lo      = .
         return scalar hi      = .
         return scalar mphi    = .
+        return scalar stilde  = .
         matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
         return matrix vtgt    = _apexogVTGT
         exit
@@ -2284,14 +2610,16 @@ program _apexogfit, rclass
     return scalar se  = _apexogSE_vec[1, 1]
     return scalar lo  = _apexogLO_vec[1, 1]
     return scalar hi  = _apexogHI_vec[1, 1]
-    return scalar mphi = scalar(_apexogMPHI)
+    return scalar mphi   = scalar(_apexogMPHI)
+    return scalar stilde = scalar(_apexogSTILDE)
+    * (v0.18: the debug line must come BEFORE `return matrix', which MOVES the
+    *  matrices into r() -- reading them afterwards gave r(111).)
+    if "`debug'" != "" di as text "[debug _apexogfit] Mata returned: target APE=" %12.7f _apexogAPE_vec[1,1] " SE=" %12.7f _apexogSE_vec[1,1]
     return matrix vtgt = _apexogVTGT
     return matrix ape_vec = _apexogAPE_vec
     return matrix se_vec  = _apexogSE_vec
     return matrix lo_vec  = _apexogLO_vec
     return matrix hi_vec  = _apexogHI_vec
-
-    if "`debug'" != "" di as text "[debug _apexogfit] Mata returned: target APE=" %12.7f _apexogAPE_vec[1,1] " SE=" %12.7f _apexogSE_vec[1,1]
 end
 
 *==============================================================================
@@ -2300,6 +2628,21 @@ end
 program _apexogerr
     di as error `"`0'"'
     exit 198
+end
+
+*==============================================================================
+* _apexogclean: drop the internal _apexog* matrices and scalars.  All results
+* live in e() by the time this runs; nothing the user owns matches the prefix.
+*==============================================================================
+program _apexogclean
+    local _mats : all matrices "_apexog*"
+    foreach _x of local _mats {
+        capture matrix drop `_x'
+    }
+    local _scals : all scalars "_apexog*"
+    foreach _x of local _scals {
+        capture scalar drop `_x'
+    }
 end
 
 *==============================================================================
@@ -2602,6 +2945,24 @@ void _apexogfit_apese_mt(string scalar yvar,
     // average dPr/dindex slope: converts latent-index units to probability
     // points (used by gunits(pr) and reported as an elicitation aid)
     st_numscalar("_apexogMPHI", mean(phi_eta))
+    // sigma_tilde: probit-index-to-STRUCTURAL-latent scale ratio.  In the
+    // structural equation y* = xb + gamma*z + eps with TOTAL error variance
+    // normalized to 1, the probit instead normalizes the CONDITIONAL (on the
+    // control functions) error sd to 1, so index units = structural units /
+    // sigma_tilde, sigma_tilde = sd(eps | CF).  From the CF loadings b_cf
+    // and the sample covariance of the control functions:
+    //   sigma_tilde = (1 + b_cf' Var(chat) b_cf)^(-1/2)
+    // which reduces to (1 + theta_cf^2)^(-1/2) for one CF with unit-variance
+    // first-stage residual.  Exact for linear first stages (chat estimates
+    // the structural first-stage error); for generalized-residual first
+    // stages the same formula is applied to the generalized residual
+    // (first-order).  cfinteract CF-product loadings are ignored
+    // (first-order in the CF coefficients).  Used by gunits(structural)
+    // and reported as an elicitation aid.
+    real colvector b_cf_col
+    b_cf_col = b_pr[|chat_start_idx \ chat_start_idx + n_endog - 1|]'
+    st_numscalar("_apexogSTILDE",
+        1/sqrt(1 + b_cf_col' * variance(CHAT) * b_cf_col))
     psi      = (y :- Phi_eta) :* phi_eta :/ (Phi_eta :* Phim_eta)
     psi_eta_psi = psi :* (eta :+ psi)
 

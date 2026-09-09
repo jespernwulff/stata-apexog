@@ -1,11 +1,12 @@
 {smcl}
-{* *! version 0.13.2  2026-06-07}{...}
+{* *! version 0.18.0  2026-09-09}{...}
 {vieweralsosee "[R] cfprobit" "help cfprobit"}{...}
 {vieweralsosee "[R] cfregress" "help cfregress"}{...}
 {viewerjumpto "Syntax" "apexog##syntax"}{...}
 {viewerjumpto "Description" "apexog##description"}{...}
 {viewerjumpto "Options" "apexog##options"}{...}
 {viewerjumpto "Examples" "apexog##examples"}{...}
+{viewerjumpto "Input requirements" "apexog##limits"}{...}
 {viewerjumpto "Stored results" "apexog##results"}{...}
 {viewerjumpto "Methods and formulas" "apexog##methods"}{...}
 {viewerjumpto "References" "apexog##references"}{...}
@@ -21,8 +22,12 @@ plausibly-exogenous instruments (Conley, Hansen, & Rossi 2012)
 
 {p 8 17 2}
 {cmd:apexog} {it:method} {depvar} [{indepvars}] {cmd:(}{it:endog}{cmd: =} {it:iv}{cmd:)}
+[{cmd:(}{it:endog2}{cmd: =} {it:iv2}{cmd:)} ...]
 {ifin}
 [{cmd:,} {it:options}]
+
+{phang}
+{it:depvar} must be coded 0/1.  Each {it:endog} may carry a {cmd:c.} or {cmd:i.} prefix (which sets the default first stage) or be a two-way interaction such as {cmd:c.d#c.X} of an endogenous treatment with a moderator (see the canonical case under Examples).  Weights and the {cmd:svy} prefix are not supported.  Typing {cmd:apexog} alone after estimation replays the posted results; {cmd:apexog, level(90)} replays at another level.
 
 {phang}
 where {it:method} is one of:
@@ -53,13 +58,14 @@ where {it:method} is one of:
 {synopt:{opt omega(numlist)}}Gaussian prior variance for each instrument's gamma (single value broadcast to all){p_end}
 {synopt:{opt iter:ations(#)}}number of Monte-Carlo draws; default {cmd:iterations(1000)}{p_end}
 {synopt:{opt seed(#)}}random-number seed for reproducibility{p_end}
+{synopt:{opt dist:ribution(type params)}}non-Gaussian prior on gamma instead of {opt mu()}/{opt omega()}: {opt normal} {it:mean sd}, {opt uniform} {it:min max}, {opt chi2} {it:df}, {opt t} {it:df}, {opt gamma} {it:shape scale}, {opt poisson} {it:mean}, or {opt special} {it:varname} (empirical draws); one parameter set per instrument{p_end}
 {synopt:{opt graphomega(numlist)}}delta sweep: rerun the LTZ simulation for each prior variance in the list (one value per step, broadcast to all instruments; Gaussian priors only) and store/plot bounds vs delta{p_end}
 {synopt:{opt graphmu(numlist)}}prior means for the sweep steps (default: zeros){p_end}
 {synopt:{opt graphdelta(numlist)}}x-axis labels for the sweep steps (default: the omega values){p_end}
 
 {syntab:Inference}
-{synopt:{opt gu:nits(latent|pr)}}units of the user-supplied gamma values: {opt latent} (default, latent-index units) or {opt pr} (probability points; divided by m_phi from the baseline fit){p_end}
-{synopt:{opt level(#)}}confidence level; default {cmd:level(.95)}{p_end}
+{synopt:{opt gu:nits(latent|pr|structural)}}units of the user-supplied gamma values: {opt latent} (default, probit-index units; synonym {opt index}), {opt pr} (probability points; divided by m_phi from the baseline fit), or {opt structural} (structural-latent units, total error variance 1; divided by sigma_tilde from the baseline fit){p_end}
+{synopt:{opt level(#)}}confidence level as a fraction ({cmd:level(.95)}, the default) or as a percent ({cmd:level(95)}){p_end}
 {synopt:{opt vce(}{it:vcetype}{cmd:)}}{it:vcetype} may be {opt robust} (default) or {opt cluster} {it:clustvar}{p_end}
 
 {syntab:Target selection (v0.11)}
@@ -73,10 +79,10 @@ where {it:method} is one of:
 {synopt:}target() is mutually exclusive with {opt aie()}.  Default (target omitted): APE for every endog in the model.{p_end}
 
 {syntab:Display}
-{synopt:{opt noheader}}suppress the formatted output header{p_end}
+{synopt:{opt noheader}}suppress the results display (notes are still printed; everything is stored in {cmd:e()}){p_end}
 {synopt:{opt gra:ph}}produce a graph of UCI bounds vs gamma (uci) or histogram of LTZ draws (ltz){p_end}
 {synopt:{opt graphopt:ions(}{it:string}{cmd:)}}extra options passed to the {cmd:twoway} call (overrides defaults){p_end}
-{synopt:{opt debug}}print the gmm/probit fits and Mata intermediates per iteration{p_end}
+{synopt:{opt debug}}print the per-iteration probit fits and Mata intermediates{p_end}
 {synoptline}
 
 
@@ -84,10 +90,11 @@ where {it:method} is one of:
 {title:Description}
 
 {pstd}
-{cmd:apexog} answers the question: {it:in a control-function probit
-model, how large would the exclusion-restriction violation gamma have to
-be before the estimated Average Partial Effect of the endogenous regressor
-crosses zero or loses significance?}  It adapts Conley, Hansen, and Rossi's
+{cmd:apexog} answers the question:
+{it:in a control-function probit model, how large would the}
+{it:exclusion-restriction violation gamma have to be before the estimated}
+{it:Average Partial Effect of the endogenous regressor crosses zero or loses}
+{it:significance?}  It adapts Conley, Hansen, and Rossi's
 (2012) "Plausibly Exogenous" framework -- originally formulated for 2SLS
 coefficients -- to target the APE (probability scale) in
 {help cfprobit:cfprobit}.
@@ -224,7 +231,10 @@ instruments appear in the parenthesized clause).
 {phang}
 {opt grid(#)} {hline 2} number of evenly-spaced grid points per instrument.
 Total fits per UCI run is {cmd:grid^k} where {it:k} is the number of
-instruments.
+instruments (the CHR curse of dimensionality).  If {cmd:grid^k} exceeds
+{cmd:c(max_matsize)}, {cmd:uci} stops with an actionable error: coarsen
+{opt grid()}, use fewer instruments, or switch to {cmd:ltz} (which draws
+from the prior and needs no grid).
 
 {dlgtab:LTZ}
 
@@ -242,6 +252,22 @@ positive.
 before drawing the gamma samples.  Use this for reproducibility.
 
 {phang}
+{opt distribution(type params)} {hline 2} non-Gaussian prior on gamma for
+{cmd:ltz}, mutually exclusive with {opt mu()}/{opt omega()}.  {it:type} is one of
+{cmd:normal}, {cmd:uniform}, {cmd:chi2}, {cmd:t}, {cmd:gamma}, {cmd:poisson}, or
+{cmd:special}; {it:params} lists the parameters for EACH instrument in turn:
+two per instrument for {cmd:normal} (mean, sd), {cmd:uniform} (min, max), and
+{cmd:gamma} (shape, scale); one per instrument for {cmd:chi2} (df), {cmd:t}
+(df), and {cmd:poisson} (mean); and, for {cmd:special}, the name of a variable
+per instrument whose observed values are sampled with replacement as the
+empirical prior.  The conventions mirror {help plausexog}.  Examples with one
+instrument: {cmd:distribution(uniform -0.1 0.1)}, {cmd:distribution(t 5)},
+{cmd:distribution(special mygammas)}.  {opt gunits()} rescales the draws
+themselves, so every type works with {opt gunits(pr)} and
+{opt gunits(structural)}.  The delta sweep ({opt graphomega()}) requires the
+Gaussian prior.
+
+{phang}
 {opt graphomega(numlist)} [{opt graphmu(numlist)} {opt graphdelta(numlist)}]
 {hline 2} the DELTA SWEEP: after the main LTZ results, rerun the simulation
 for each prior variance in {opt graphomega()} (a single value per step,
@@ -251,21 +277,30 @@ convolved CI and prior-only band per step -- the CHR (2012) Figures 1-2
 Results are stored in {cmd:e(sweep)} (columns: delta mu lb ub lb_prior
 ub_prior); with {opt graph}, the sweep plot replaces the LTZ histogram.
 {opt graphmu()} sets per-step prior means (default zeros); {opt graphdelta()}
-relabels the x-axis (default: the omega values).  {opt gunits(pr)} applies
-to sweep values too.  Each step costs a full set of {opt iterations()}
-draws.
+relabels the x-axis (default: the omega values).  {opt gunits(pr)} and
+{opt gunits(structural)} apply to sweep values too.  Each step costs a full
+set of {opt iterations()} draws.
 
 {dlgtab:Inference}
 
 {phang}
-{opt gunits(latent|pr)} {hline 2} units in which the user-supplied gamma
-quantities ({opt gmin()}/{opt gmax()}, {opt mu()}/{opt omega()}, and
-{opt distribution()} draws) are expressed.
+{opt gunits(latent|pr|structural)} {hline 2} units in which the user-supplied
+gamma quantities ({opt gmin()}/{opt gmax()}, {opt mu()}/{opt omega()},
+{opt distribution()} draws, and sweep values) are expressed.  Internally the
+violation always enters as an offset on the PROBIT-INDEX scale; this option
+tells apexog which of the three elicitation scales your numbers live on, and
+it converts them after the baseline fit.  Getting the scale right matters:
+Session-34-style simulations show that feeding a structural-units prior to
+the index unrescaled is a scale miscalibration whose wide-prior LTZ coverage
+is 2*Phi(z*sigma_tilde)-1 (about 0.88 instead of 0.95 at an endogeneity
+correlation of 0.6).
 
-{phang2}{cmd:gunits(latent)} (default) {hline 2} gamma is a coefficient in the
-latent index (probit standard-deviation units), i.e. the direct effect of the
-instrument on y*.  This is the structural scale on which the offset enters
-the model.{p_end}
+{phang2}{cmd:gunits(latent)} (default; synonym {cmd:index}) {hline 2} gamma
+is a coefficient in the PROBIT-INDEX latent equation: the scale on which the
+probit normalizes the error sd CONDITIONAL on the control functions to 1.
+This is the scale the offset uses internally, so no conversion is applied.
+Note this is NOT the structural-latent scale (see {cmd:structural} below);
+the two differ by the factor sigma_tilde.{p_end}
 
 {phang2}{cmd:gunits(pr)} {hline 2} gamma values are PROBABILITY POINTS: the
 instrument's direct effect on Pr(y=1) per unit of Z.  Internally apexog
@@ -277,14 +312,39 @@ itself is rescaled, which handles chi2/t/gamma/poisson/special whose
 parameters are not scale parameters).  This puts apexog's gamma on the same
 scale as {help plausexog}'s when the outcome is binary and plausexog is run
 as a linear probability model, so the two commands can be compared for the
-same elicited violation.  The conversion is first-order (exact as
-gamma -> 0; m_phi is held at its baseline value).  All gamma values
-displayed and stored ({cmd:e(grid)}, graphs) are in LATENT units; a header
-note records the conversion, and m_phi is returned in {cmd:e(mphi)}.{p_end}
+same elicited violation.  Probability-scale elicitation is also IMMUNE to
+the index-vs-structural units gap described under {cmd:structural}.{p_end}
+
+{phang2}{cmd:gunits(structural)} {hline 2} gamma values are on the
+STRUCTURAL latent scale: the researcher reasons about
+y* = xb + gamma*z + eps with the TOTAL error variance normalized to 1 (the
+scale on which simulation DGPs and textbook latent-variable models are
+usually written).  The probit index instead normalizes the error sd
+CONDITIONAL on the control functions, so index units = structural units /
+sigma_tilde with sigma_tilde = sd(eps | CF) < 1 whenever there is real
+endogeneity.  apexog estimates sigma_tilde from the baseline fit's
+control-function coefficient(s) as sigma_tilde =
+(1 + b_cf' Var(chat) b_cf)^(-1/2) -- for a single control function with a
+unit-variance first-stage residual this is (1 + theta_cf^2)^(-1/2) -- and
+divides every gamma quantity by it ({opt omega()} by sigma_tilde^2;
+non-Gaussian draws are rescaled draw-by-draw).  Exact for linear first
+stages; for generalized-residual first stages (probit/fprobit/poisson) the
+same formula is applied to the generalized residual and is a first-order
+approximation.  cfinteract control-function product terms are ignored in
+sigma_tilde.{p_end}
+
+{phang2}For all three settings the conversion is first-order (exact as
+gamma -> 0; m_phi and sigma_tilde are held at their baseline values).  All
+gamma values displayed and stored ({cmd:e(grid)}, graphs) are in
+PROBIT-INDEX (latent) units; a header note records any conversion, and both
+conversion factors are always reported in the header and returned in
+{cmd:e(mphi)} and {cmd:e(stilde)}.{p_end}
 
 {phang}
 {opt level(#)} {hline 2} confidence level (both methods; for {cmd:ltz} it is
-the percentile level of the convolved draws).  Must be in (0, 1).
+the percentile level of the convolved draws), given as a fraction in (0, 1)
+or, as in other Stata commands, as a percent in [1, 100): {cmd:level(.9)} and
+{cmd:level(90)} are equivalent.  {cmd:e(level)} always stores the fraction.
 Default 0.95.
 
 {phang}
@@ -295,66 +355,132 @@ The Murphy-Topel correction is applied to account for the generated
 regressor.{p_end}
 
 {phang2}{cmd:vce(cluster} {it:clustvar}{cmd:)} {hline 2} cluster-robust on
-{it:clustvar}.  The cluster correction is propagated through both the
-first-stage VCE and the Murphy-Topel meat (cluster-summed scores).{p_end}
+{it:clustvar}, which may be numeric or string; the usual abbreviations such as
+{cmd:vce(cl id)} are accepted.  The cluster correction is propagated through
+both the first-stage VCE and the Murphy-Topel meat (cluster-summed scores).
+The number of clusters is stored in {cmd:e(N_clust)} and the variable name in
+{cmd:e(clustvar)}.{p_end}
 
 {phang}
 For bootstrap inference, wrap {cmd:apexog} in Stata's
 {help bootstrap:bootstrap} prefix:
 
 {phang2}
-{cmd:. bootstrap, reps(500): apexog uci y X (d=Z), gmin(-0.3) gmax(0.3)}
+{cmd:. bootstrap, reps(500): apexog uci promoted tenure manager (training = subsidy), gmin(-0.3) gmax(0.3)}
 {p_end}
 
 
 {marker examples}{...}
 {title:Examples}
 
-{phang}{cmd:. use myproject_data}{p_end}
+{pstd}
+The examples below run on this small simulated dataset (a binary promotion
+outcome, two continuous and one binary endogenous treatment, two instruments,
+and a few exogenous controls/moderators).  Paste it in to follow along:
 
-{pstd}{ul:UCI with one IV, gamma in [-0.3, 0.3]:}{p_end}
-{phang}{cmd:. apexog uci grad income age (hsgpa = hscomp), gmin(-0.3) gmax(0.3)}{p_end}
+{phang}{cmd:. clear}{p_end}
+{phang}{cmd:. set seed 8675309}{p_end}
+{phang}{cmd:. set obs 4000}{p_end}
+{phang}{cmd:. gen double tenure     = rnormal()} {it:// exogenous control (cts)}{p_end}
+{phang}{cmd:. gen double experience = rnormal()} {it:// exogenous moderator (cts)}{p_end}
+{phang}{cmd:. gen byte   manager    = runiform() < 0.5} {it:// exogenous moderator (binary)}{p_end}
+{phang}{cmd:. gen double subsidy    = rnormal()} {it:// instrument}{p_end}
+{phang}{cmd:. gen double grant      = rnormal()} {it:// second instrument}{p_end}
+{phang}{cmd:. gen double a1         = rnormal()} {it:// UNOBSERVED (drives training/certified)}{p_end}
+{phang}{cmd:. gen double a2         = rnormal()} {it:// UNOBSERVED (drives coaching)}{p_end}
+{phang}{cmd:. gen double e          = 0.4*a1 + 0.4*a2 + sqrt(0.68)*rnormal()}{p_end}
+{phang}{cmd:. gen double training   = 0.7*subsidy + 0.3*tenure + a1} {it:// endogenous (cts)}{p_end}
+{phang}{cmd:. gen double coaching   = 0.6*grant + 0.3*experience + a2} {it:// endogenous (cts)}{p_end}
+{phang}{cmd:. gen byte   certified  = 0.9*subsidy + 0.3*tenure + a1 > 0.4} {it:// endogenous (binary)}{p_end}
+{phang}{cmd:. gen double ystar = -0.3 + 0.5*training + 0.3*coaching + 0.3*tenure ///}{p_end}
+{phang}{cmd:        + 0.2*experience + 0.3*manager + 0.4*training*manager ///}{p_end}
+{phang}{cmd:        + 0.25*tenure*experience + e}{p_end}
+{phang}{cmd:. gen byte   promoted = ystar > 0} {it:// binary outcome}{p_end}
+{phang}{cmd:. gen int    team = ceil(_n/20)} {it:// 200 clusters of 20}{p_end}
 
-{pstd}{ul:UCI with a binary endogenous regressor and probit first stage:}{p_end}
-{phang}{cmd:. apexog uci employed age educ (vetstatus = draftnumber),}{p_end}
+{pstd}{ul:UCI for the APE of a continuous treatment, gamma in [-0.3, 0.3]:}{p_end}
+{phang}{cmd:. apexog uci promoted tenure manager (training = subsidy), gmin(-0.3) gmax(0.3)}{p_end}
+
+{pstd}{ul:UCI with a binary endogenous treatment and probit first stage:}{p_end}
+{phang}{cmd:. apexog uci promoted tenure manager (certified = subsidy),}{p_end}
 {phang}{cmd:    firststage(probit) gmin(-0.1) gmax(0.1) grid(11)}{p_end}
 
 {pstd}{ul:LTZ with a tight Gaussian prior centered at 0:}{p_end}
-{phang}{cmd:. apexog ltz grad income age (hsgpa = hscomp),}{p_end}
+{phang}{cmd:. apexog ltz promoted tenure manager (training = subsidy),}{p_end}
 {phang}{cmd:    mu(0) omega(0.0025) iterations(2000) seed(12345)}{p_end}
 
+{pstd}{ul:Same prior elicited on the other two gamma scales (see gunits()):}{p_end}
+{phang}{cmd:. apexog ltz promoted tenure manager (training = subsidy),}{p_end}
+{phang}{cmd:    mu(0) omega(0.0025) iterations(2000) seed(12345) gunits(structural)} {it:// structural-latent units, /sigma_tilde}{p_end}
+{phang}{cmd:. apexog ltz promoted tenure manager (training = subsidy),}{p_end}
+{phang}{cmd:    mu(0) omega(1.5e-06) iterations(2000) seed(12345) gunits(pr)} {it:// probability points, /m_phi}{p_end}
+
 {pstd}{ul:Cluster-robust SEs:}{p_end}
-{phang}{cmd:. apexog uci y X (d = Z), gmin(-0.5) gmax(0.5)}{p_end}
-{phang}{cmd:    vce(cluster firm_id)}{p_end}
+{phang}{cmd:. apexog uci promoted tenure manager (training = subsidy), gmin(-0.5) gmax(0.5)}{p_end}
+{phang}{cmd:    vce(cluster team)}{p_end}
 
 {pstd}{ul:Visualize the UCI:}{p_end}
-{phang}{cmd:. apexog uci y X (d = Z), gmin(-0.5) gmax(0.5) grid(21) graph}{p_end}
+{phang}{cmd:. apexog uci promoted tenure manager (training = subsidy), gmin(-0.5) gmax(0.5) grid(21) graph}{p_end}
 
 {pstd}{ul:Phase-1 syntax with i. prefix and target() narrowing (v0.10):}{p_end}
-{phang}{cmd:. apexog uci y X (i.d = Z), gmin(-0.1) gmax(0.1)} {it:// = firststage(probit)}{p_end}
-{phang}{cmd:. apexog uci y X (d1 d2 = Z1 Z2), gmin(0 0) gmax(0 0) target(d1)} {it:// only d1's APE is reported}{p_end}
+{phang}{cmd:. apexog uci promoted tenure manager (i.certified = subsidy), gmin(-0.1) gmax(0.1)} {it:// = firststage(probit)}{p_end}
+{phang}{cmd:. apexog uci promoted tenure (training coaching = subsidy grant), gmin(0 0) gmax(0 0) target(training)} {it:// only training's APE}{p_end}
 
 {pstd}{ul:Phase-2 syntax: target(c.X#i.d) for AIE with prefix-driven type (v0.11):}{p_end}
-{phang}{cmd:. apexog uci y X Z (d = Z2), gmin(-0.3) gmax(0.3) target(c.X#c.Z)} {it:// cts × cts AIE}{p_end}
-{phang}{cmd:. apexog uci y X (i.d = Z), gmin(-0.3) gmax(0.3) target(c.X#i.d)} {it:// cts × bin AIE (firstdiff)}{p_end}
-{phang}{cmd:. apexog uci y X (i.d = Z), gmin(-0.3) gmax(0.3) target(i.X#i.d)} {it:// bin × bin AIE}{p_end}
+{phang}{cmd:. apexog uci promoted tenure experience (training = subsidy), gmin(-0.3) gmax(0.3) target(c.tenure#c.experience)} {it:// cts-by-cts AIE}{p_end}
+{phang}{cmd:. apexog uci promoted tenure (i.certified = subsidy), gmin(-0.3) gmax(0.3) target(c.tenure#i.certified)} {it:// cts-by-binary (firstdiff)}{p_end}
+{phang}{cmd:. apexog uci promoted manager (i.certified = subsidy), gmin(-0.3) gmax(0.3) target(i.manager#i.certified)} {it:// binary-by-binary}{p_end}
 
-{pstd}{ul:Sensitivity of the Average Interaction Effect for two exogenous
-moderators under plausible exclusion-restriction violations:}{p_end}
-{phang}{cmd:. apexog uci y X Z (d = Z2), gmin(-0.3) gmax(0.3) grid(11) aie(X Z)}{p_end}
-{phang}{cmd:. apexog ltz y X Z (d = Z2), mu(0) omega(0.0025) iterations(2000) aie(X Z)}{p_end}
+{pstd}{ul:Sensitivity of the Average Interaction Effect for two exogenous}
+{ul:moderators under plausible exclusion-restriction violations:}{p_end}
+{phang}{cmd:. apexog uci promoted tenure experience (training = subsidy), gmin(-0.3) gmax(0.3) grid(11) aie(tenure experience)}{p_end}
+{phang}{cmd:. apexog ltz promoted tenure experience (training = subsidy), mu(0) omega(0.0025) iterations(2000) aie(tenure experience)}{p_end}
 
-{pstd}{ul:Canonical case (v0.13): interaction of an ENDOGENOUS treatment d with
-a moderator X.  Because d*X is itself endogenous, declare it as a SECOND
-endogenous regressor and instrument it (typically with the base instrument(s)
-and their moderator interactions), exactly as in {help cfprobit} / {help plausexog}.
-{cmd:cfinteract} is auto-on and the AIE is reported on the probability scale:}{p_end}
-{phang}{cmd:. apexog uci y X (c.d c.d#c.X = Zinst c.Zinst#c.X),}{p_end}
-{phang}{cmd:      target(c.d#c.X) gmin(-0.3 -0.3) gmax(0.3 0.3) grid(11)}{p_end}
+{pstd}{ul:Canonical case (v0.13): an ENDOGENOUS treatment interacted with a}
+{ul:moderator.  training*manager is itself endogenous, so declare it as a}
+{ul:SECOND endogenous regressor and instrument it (here with subsidy and}
+{ul:subsidy*manager), exactly as in cfprobit / plausexog.  cfinteract is}
+{ul:auto-on; the AIE is reported on the probability scale:}{p_end}
+{phang}{cmd:. apexog uci promoted tenure manager (c.training c.training#c.manager = subsidy c.subsidy#i.manager),}{p_end}
+{phang}{cmd:      target(c.training#i.manager) gmin(-0.3 -0.3) gmax(0.3 0.3) grid(11)}{p_end}
 
 {pstd}{it:Note:} the older {cmd:aie(d X)} form (with d in a single endog clause
 {cmd:(d = Zinst)}) treats {cmd:d*X} as an exogenous control -- a mis-specification
 when d is endogenous.  Prefer the explicit two-endog form above.{p_end}
+
+{pstd}{it:Moderator type.}  For an endogenous-treatment interaction, the moderator
+type is set by the prefix in {opt target()}: {cmd:target(c.d#c.W)} gives the
+cts-by-cts cross-partial, {cmd:target(c.d#i.W)} the cts-by-binary first
+difference (validated to machine precision against the manual decomposition for a
+binary exogenous moderator).  A binary {it:endogenous treatment} (probit first
+stage with a generalized-residual control function for the interaction) is not yet
+supported on this path.{p_end}
+
+{pstd}{it:cfinteract scope.}  {cmd:cfinteract} adds the {bf:pairwise} products of
+the control functions.  For two endogenous regressors (the canonical
+endogenous-interaction AIE) this reproduces {help cfprobit}'s {cmd:cfinteract}
+exactly.  With three or more control functions, {cmd:cfprobit}'s {cmd:##}
+expansion also includes the three-way and higher products, which apexog does not
+add; for exact {cmd:cfprobit} equivalence use at most two endogenous
+regressors.{p_end}
+
+
+{marker limits}{...}
+{title:Input requirements and limitations}
+
+{pstd}
+{cmd:apexog} checks its inputs up front and stops with an explicit message
+(return code 198) rather than failing deep inside a fit or, worse, returning a
+silently wrong answer:
+
+{phang2}- {it:depvar} must be coded 0/1 on the estimation sample (Stata's {cmd:probit} would treat any nonzero value as 1, but the two-step variance needs the 0/1 coding); recode first, e.g. {cmd:gen byte y01 = (y != 0)}.{p_end}
+{phang2}- {it:depvar}, the controls, the endogenous regressors, and the instruments must be disjoint.  An instrument that merely duplicates a control (e.g. the main effect of a {cmd:##} term) is dropped by the full-rank cleaning with a note.{p_end}
+{phang2}- {opt gmin()} may not exceed {opt gmax()}; {opt grid()} must be at least 2; {opt omega()} must be positive; {opt iterations()} must be at least 10.{p_end}
+{phang2}- {opt firststage(probit)} needs a 0/1 endogenous regressor, {opt firststage(fprobit)} one in [0,1], and {opt firststage(poisson)} a nonnegative one.{p_end}
+{phang2}- A first stage that drops observations (perfect prediction in a probit first stage) or leaves the control function undefined stops the command.  Perfect prediction or a collinear control function in the MAIN probit returns missing bounds with a warning instead.{p_end}
+{phang2}- Weights, the {cmd:svy} prefix, and {cmd:vce(bootstrap)} are not supported; wrap {cmd:apexog} in the {cmd:bootstrap} prefix for bootstrap inference.{p_end}
+{phang2}- Variable names are unabbreviated before use, so abbreviations work; names longer than 27 characters are truncated in {cmd:e(lb_}{it:endog}{cmd:)}/{cmd:e(ub_}{it:endog}{cmd:)} and in matrix column labels (Stata's 32-character name limit).{p_end}
+{phang2}- Options that belong to the other method ({opt gmin()}/{opt gmax()} with {cmd:ltz}; {opt mu()}/{opt omega()}/{opt distribution()}/{opt seed()} with {cmd:uci}) are ignored with a note.{p_end}
 
 
 {marker results}{...}
@@ -375,25 +501,35 @@ all work.  In addition it stores (common to both methods):
 {synopt:{cmd:e(baseline_ape)}}APE (or AIE if {opt aie()}) at gamma = 0{p_end}
 {synopt:{cmd:e(baseline_se)}}MT-corrected SE at gamma = 0{p_end}
 {synopt:{cmd:e(mphi)}}mean(normalden(eta_hat)) at the baseline fit: average dPr/dindex slope; the latent-to-probability conversion factor used by {opt gunits(pr)}{p_end}
-{synopt:{cmd:e(lb_}{it:endog}{cmd:)}}lower bound of the APE interval (per endog){p_end}
+{synopt:{cmd:e(stilde)}}sigma_tilde = (1 + b_cf' Var(chat) b_cf)^(-1/2) at the baseline fit: the probit-index-to-structural-latent scale ratio; the conversion factor used by {opt gunits(structural)}{p_end}
+{synopt:{cmd:e(lb_}{it:endog}{cmd:)}}lower bound of the APE interval (per endog; a name longer than 27 characters is truncated){p_end}
 {synopt:{cmd:e(ub_}{it:endog}{cmd:)}}upper bound of the APE interval (per endog){p_end}
 {synopt:{cmd:e(lb_aie)} / {cmd:e(ub_aie)}}lower/upper bound of the AIE interval (with {opt aie()}){p_end}
+{synopt:{cmd:e(N_clust)}}number of clusters (with {opt vce(cluster)}){p_end}
 
 {p2col 5 20 24 2: Macros (additional in {opt aie()} mode)}{p_end}
 {synopt:{cmd:e(target)}}{cmd:ape} (default) or {cmd:aie}{p_end}
 {synopt:{cmd:e(aie_vars)}}the two variables in {opt aie(X Z)}, space-separated{p_end}
+{synopt:{cmd:e(aie_spec)}}the {opt target()} interaction spec, e.g. {cmd:c.X#i.d} (AIE via {opt target()}){p_end}
+{synopt:{cmd:e(target_list)}}the endogenous regressors whose APE is reported (APE mode){p_end}
 
 {p2col 5 20 24 2: Macros}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:apexog}{p_end}
+{synopt:{cmd:e(cmdline)}}the full command as typed{p_end}
 {synopt:{cmd:e(method)}}{cmd:uci} or {cmd:ltz}{p_end}
-{synopt:{cmd:e(gunits)}}{cmd:latent} or {cmd:pr} (units of the user-supplied gamma values){p_end}
+{synopt:{cmd:e(gunits)}}{cmd:latent}, {cmd:pr}, or {cmd:structural} (units of the user-supplied gamma values){p_end}
 {synopt:{cmd:e(estimator)}}{cmd:cfprobit}{p_end}
 {synopt:{cmd:e(firststage)}}{cmd:linear}, {cmd:probit}, {cmd:fprobit}, or {cmd:poisson}{p_end}
 {synopt:{cmd:e(vce)}}{cmd:Murphy-Topel}{p_end}
 {synopt:{cmd:e(depvar)}}name of dependent variable{p_end}
-{synopt:{cmd:e(endog)}}name of endogenous regressor{p_end}
+{synopt:{cmd:e(endog)}}names of the endogenous regressors{p_end}
 {synopt:{cmd:e(exog)}}names of exogenous regressors{p_end}
-{synopt:{cmd:e(instruments)}}names of instruments{p_end}
+{synopt:{cmd:e(instruments)}}names of instruments (after full-rank cleaning){p_end}
+{synopt:{cmd:e(clustvar)}}cluster variable (with {opt vce(cluster)}){p_end}
+
+{p2col 5 20 24 2: Matrices (both methods; J = number of targets)}{p_end}
+{synopt:{cmd:e(b)} / {cmd:e(V)}}baseline (gamma = 0) target estimates and their Murphy-Topel covariance{p_end}
+{synopt:{cmd:e(baseline_ape_vec)} / {cmd:e(baseline_se_vec)}}{cmd:J x 1} baseline estimates and SEs (rows labelled by target){p_end}
 
 {pstd}
 For {cmd:method = uci}, also:
@@ -403,7 +539,8 @@ For {cmd:method = uci}, also:
 {synopt:{cmd:e(baseline_lo)} / {cmd:e(baseline_hi)}}baseline (gamma=0) CI bounds{p_end}
 
 {p2col 5 20 24 2: Matrices}{p_end}
-{synopt:{cmd:e(grid)}}{cmd:(grid^k) x (k+3)} matrix with columns (g1, ..., gk, ape, lo, hi){p_end}
+{synopt:{cmd:e(grid)}}{cmd:(grid^k) x (k+3J)} matrix with columns (g1, ..., gk) followed by (ape, lo, hi) for each target{p_end}
+{synopt:{cmd:e(baseline_lo_vec)} / {cmd:e(baseline_hi_vec)}}{cmd:J x 1} baseline CI bounds{p_end}
 
 {pstd}
 For {cmd:method = ltz}, also:
@@ -500,18 +637,41 @@ targets the eps draws are independent across targets, which is exact for the
 per-target marginal intervals reported.
 
 {pstd}
-{ul:Gamma scale.}  The violation enters the LATENT index:
-Pr(y=1) = Phi(... + z'gamma), so gamma is in probit standard-deviation
-units, whereas {help plausexog} applied to a binary outcome (an LPM) takes
-gamma in probability units.  The two scales are linked by the average link
-slope m_phi = mean(normalden(eta_hat)): the average direct effect of Z on
-Pr(y=1) implied by a latent gamma is m_phi * gamma.  {opt gunits(pr)}
-applies the conversion gamma_latent = gamma_pr / m_phi (variances divided by
-m_phi^2) using the baseline fit, which makes apexog and plausexog bounds
-comparable on a common probability-scale violation axis.  The conversion is
-local: m_phi is evaluated at gamma = 0 and the mapping is exact in the
-limit gamma -> 0.  m_phi is reported in the output header and stored in
-{cmd:e(mphi)}.
+{ul:Gamma scale.}  The violation enters as an offset in the PROBIT-INDEX
+latent equation: Pr(y=1) = Phi(... + z'gamma), where the probit normalizes
+the error sd CONDITIONAL on the control functions to 1.  Three elicitation
+scales are supported, linked by two baseline-fit conversion factors that
+are always reported in the header:
+
+{phang2}(i) {ul:probit-index units} (the default, {opt gunits(latent)}):
+the scale of the fitted probit coefficients.  No conversion.{p_end}
+
+{phang2}(ii) {ul:probability points} ({opt gunits(pr)}): the instrument's
+direct effect on Pr(y=1).  Linked to index units by the average link slope
+m_phi = mean(normalden(eta_hat)): gamma_index = gamma_pr / m_phi (variances
+by m_phi^2).  This makes apexog and {help plausexog} (run as an LPM on the
+binary outcome) comparable on a common violation axis.{p_end}
+
+{phang2}(iii) {ul:structural-latent units} ({opt gunits(structural)}): the
+scale of y* = xb + gamma*z + eps with TOTAL error variance 1 -- the scale
+simulation DGPs and textbook latent-variable models are usually written on.
+Linked to index units by sigma_tilde = sd(eps | CF): gamma_index =
+gamma_structural / sigma_tilde (variances by sigma_tilde^2), with
+sigma_tilde estimated from the control-function coefficient(s) as
+sigma_tilde = (1 + b_cf' Var(chat) b_cf)^(-1/2).{p_end}
+
+{pstd}
+Confusing scales (ii) and (iii) with (i) is not innocuous.  Because
+sigma_tilde < 1 under endogeneity, a structural-units prior fed to the
+index unrescaled is uniformly too narrow by the factor sigma_tilde; for a
+wide Gaussian prior the LTZ coverage of a nominal 1-alpha interval is then
+2*Phi(z*sigma_tilde)-1 rather than 1-alpha (about 0.88 instead of 0.95 when
+the endogeneity correlation is 0.6).  Probability-scale elicitation
+({opt gunits(pr)}) is immune to this gap because the pr -> index conversion
+already carries the correct scale.  All conversions are local: m_phi and
+sigma_tilde are evaluated at gamma = 0 and the mappings are exact in the
+limit gamma -> 0.  Both factors are stored in {cmd:e(mphi)} and
+{cmd:e(stilde)}.
 
 {pstd}
 {ul:Average Interaction Effect (with {opt aie(X Z)})}.  Three cases
@@ -545,29 +705,29 @@ Plausibly Exogenous.  {it:Review of Economics and Statistics} 94: 260-272.
 
 {phang}
 Murphy, K. M., and R. H. Topel.  1985.
-Estimation and Inference in Two-Step Econometric Models.  {it:Journal of
-Business & Economic Statistics} 3: 370-379.
+Estimation and Inference in Two-Step Econometric Models.
+{it:Journal of Business & Economic Statistics} 3: 370-379.
 
 {phang}
 Wooldridge, J. M.  2015.
-Control function methods in applied econometrics.  {it:Journal of Human
-Resources} 50: 420-445.
+Control function methods in applied econometrics.
+{it:Journal of Human Resources} 50: 420-445.
 
 {phang}
 Clarke, D.  2020.
 {cmd:plausexog}: Stata module for plausibly exogenous 2SLS.  Statistical
 Software Components S458310, Boston College Department of Economics.
-{it:[This package targets the structural coefficient; apexog adapts
-the same framework to target the APE in a cfprobit model.]}
+{it:[This package targets the structural coefficient; apexog adapts the same}
+{it:framework to target the APE in a cfprobit model.]}
 
 {phang}
 Radean, M.  2023.
 ginteff: A new command for estimating and graphing average
 semielasticities and average marginal and interaction effects after a
 nonlinear regression model.  {it:Stata Journal} 23: 1015-1043.
-{it:[apexog's aie() option targets the same AIE quantity as
-ginteff, but adds Conley-Hansen-Rossi sensitivity bounds and a
-Murphy-Topel correction for the generated regressor.]}
+{it:[apexog's aie() option targets the same AIE quantity as ginteff, but adds}
+{it:Conley-Hansen-Rossi sensitivity bounds and a Murphy-Topel correction for}
+{it:the generated regressor.]}
 
 
 {title:Author}
