@@ -145,7 +145,7 @@ sensitivity band, and returned in {cmd:e(lo_prior_vec)}/{cmd:e(hi_prior_vec)}.
 Standard errors use the Murphy-Topel two-step sandwich (Murphy & Topel
 1985), computed in Mata.  At gamma = 0 the resulting APE SE matches
 {help cfprobit:cfprobit} + {help margins:margins, dydx()} to machine
-precision (validated in {it:./_sanity/06_mt_vs_gmm.do}).  With
+precision (checked in the package's validation suite).  With
 {opt firststage(biprobit)} (v0.19) the main equation is instead the recursive
 bivariate probit fit jointly with the 0/1 treatment, and the SE is the MLE
 delta method; see the Options and Methods sections for when to prefer it.
@@ -321,7 +321,7 @@ gamma quantities ({opt gmin()}/{opt gmax()}, {opt mu()}/{opt omega()},
 violation always enters as an offset on the PROBIT-INDEX scale; this option
 tells apexog which of the three elicitation scales your numbers live on, and
 it converts them after the baseline fit.  Getting the scale right matters:
-Session-34-style simulations show that feeding a structural-units prior to
+Simulations show that feeding a structural-units prior to
 the index unrescaled is a scale miscalibration whose wide-prior LTZ coverage
 is 2*Phi(z*sigma_tilde)-1 (about 0.88 instead of 0.95 at an endogeneity
 correlation of 0.6).
@@ -366,8 +366,8 @@ always-on header line "1 structural-latent unit of gamma = 1/sigma_tilde
 latent-index units") is derived for, and exact with, a LINEAR first stage,
 where the control function estimates the structural first-stage error.  With
 {opt firststage(probit)}, {opt fprobit}, or {opt poisson} it does NOT apply:
-in the Table 1 Monte Carlos of the companion paper
-({it:paper/sims/table1/RESULTS.txt}; n = 5000, R = 1000 per cell, gamma_true
+in Monte Carlo simulations
+(n = 5000, R = 1000 per cell, gamma_true
 entered in structural units) the structural gamma enters the probit index
 essentially UNSCALED -- refitting at the raw structural gamma gives Wald
 coverage of the true APE 0.936 against 0.589 for the refit at
@@ -393,7 +393,7 @@ conversion factors are always reported in the header and returned in
 {cmd:e(mphi)} and {cmd:e(stilde)}.  Both are computed from the gamma = 0
 baseline fit, which is misspecified whenever the true violation is nonzero,
 so they describe that fit rather than being structural constants: in the
-Table 1 Monte Carlos the mean {cmd:e(stilde)} moves with the true violation
+Monte Carlo simulations the mean {cmd:e(stilde)} moves with the true violation
 (linear first stage 0.80, 0.91, 1.00 at gamma_true = 0, 0.2, 0.5 against a
 true sqrt(1 - rho^2) of 0.80; Poisson first stage 0.98, 0.93, 0.61): the
 omitted z'gamma term is partly absorbed by the control-function coefficient
@@ -409,8 +409,8 @@ switches from 0 to 1, for any other instrument the average derivative
 mean(phi(eta))*gamma.  The first-order value m_phi*gamma used by
 {opt gunits(pr)} approximates it; the two agree for small violations and can
 differ by several percent for a large violation of a 0/1 instrument on an
-outcome near 0 or 1 (about 10% in the Catholic-schooling application of the
-companion paper).  With a linear first stage, as many instruments as
+outcome near 0 or 1 (about 10% in an application with a 0/1 instrument and an
+outcome near 1).  With a linear first stage, as many instruments as
 endogenous regressors and a continuous instrument they coincide exactly,
 because the offset then lies in the span of the regressors and control
 functions and the refit leaves the fitted index unchanged.  The UCI output
@@ -566,7 +566,7 @@ silently wrong answer:
 {phang2}- {opt firststage(probit)} needs a 0/1 endogenous regressor, {opt firststage(fprobit)} one in [0,1], and {opt firststage(poisson)} a nonnegative one.{p_end}
 {phang2}- {opt firststage(biprobit)} needs a 0/1 endogenous regressor that is the ONLY endogenous regressor and no AIE target; several endogenous regressors, {opt aie()}/{opt target(c.X#i.d)}, or {opt estimator(biprobit)} with it stop with an explicit message.{p_end}
 {phang2}- {ul:Nonlinear first stages are approximations.}  With {opt firststage(probit)}, {opt fprobit}, or {opt poisson} the control function is Wooldridge's (2014, 2015) generalized residual.  It is consistent for the APE under his sufficiency assumption D(eps | z, d) = D(eps | GR), which does NOT hold under joint normality of the structural errors; there the two-step APE is biased, increasingly so in the endogeneity correlation (-2.7%, -11.6%, -50.6% at error correlations 0.3, 0.5, 0.8 in the large-N check under {help apexog##gr:Methods and formulas}).  {cmd:apexog} reproduces {cmd:cfprobit} exactly, so this is a property of the estimator, not of the implementation.  For a 0/1 treatment under joint normality use {opt firststage(biprobit)}; the results header carries the same note whenever one of these first stages is used.{p_end}
-{phang2}- {ul:gunits(structural) is a linear-first-stage conversion.}  The sigma_tilde rescaling behind {opt gunits(structural)} (and the "1 structural-latent unit of gamma = 1/sigma_tilde latent-index units" header line) is derived for a linear first stage.  With {opt firststage(probit)}, {opt fprobit}, or {opt poisson} the Table 1 Monte Carlos of the companion paper put the correct offset at the UNSCALED structural gamma (Wald coverage at the true violation 0.936 vs 0.589 for binary d and 0.950 vs 0.881 for fractional d, raw gamma vs gamma/sqrt(1 - rho^2); zero-bias offset within 5% of the structural gamma), so the option should not be used with those first stages.  {cmd:apexog} accepts the combination but prints a warning line in the results header (results unchanged), and {cmd:e(stilde)} is then the linear formula evaluated on a generalized residual, not a conversion factor.  Elicit on the index scale or with {opt gunits(pr)} instead; see {help apexog##gunits:gunits()}.{p_end}
+{phang2}- {ul:gunits(structural) is a linear-first-stage conversion.}  The sigma_tilde rescaling behind {opt gunits(structural)} (and the "1 structural-latent unit of gamma = 1/sigma_tilde latent-index units" header line) is derived for a linear first stage.  With {opt firststage(probit)}, {opt fprobit}, or {opt poisson} Monte Carlo simulations put the correct offset at the UNSCALED structural gamma (Wald coverage at the true violation 0.936 vs 0.589 for binary d and 0.950 vs 0.881 for fractional d, raw gamma vs gamma/sqrt(1 - rho^2); zero-bias offset within 5% of the structural gamma), so the option should not be used with those first stages.  {cmd:apexog} accepts the combination but prints a warning line in the results header (results unchanged), and {cmd:e(stilde)} is then the linear formula evaluated on a generalized residual, not a conversion factor.  Elicit on the index scale or with {opt gunits(pr)} instead; see {help apexog##gunits:gunits()}.{p_end}
 {phang2}- A first stage that drops observations (perfect prediction in a probit first stage) or leaves the control function undefined stops the command.  Perfect prediction or a collinear control function in the MAIN probit returns missing bounds with a warning instead.{p_end}
 {phang2}- Weights, the {cmd:svy} prefix, and {cmd:vce(bootstrap)} are not supported; wrap {cmd:apexog} in the {cmd:bootstrap} prefix for bootstrap inference.{p_end}
 {phang2}- Variable names are unabbreviated before use, so abbreviations work; names longer than 27 characters are truncated in {cmd:e(lb_}{it:endog}{cmd:)}/{cmd:e(ub_}{it:endog}{cmd:)} and in matrix column labels (Stata's 32-character name limit).{p_end}
@@ -735,7 +735,7 @@ valid".  Because {cmd:apexog} reproduces {cmd:cfprobit} exactly, the property
 is inherited.  Its size is not academic.  In the bivariate-normal design of the
 validation suite (y* = -0.2 + 0.6 d + 0.5 x + z'gamma + eps, d = 1[0.8 z + 0.4 x
 + v > 0], x, z, v standard normal, corr(eps, v) = rho, gamma = 0, N = 400,000;
-{it:paper/sims/scrutiny_2026-10-15/binary_d_largeN.log}; true discrete-change
+true discrete-change
 APE 0.21065):
 
 {p 8 8 2}rho = 0.3:   GR-CF two-step APE 0.20488 (bias -2.7%)     recursive bivariate probit 0.21071 (+0.0%){p_end}
@@ -744,14 +744,14 @@ APE 0.21065):
 
 {pstd}
 The Murphy-Topel SE (about 0.003 here) is correctly sized for the two-step
-estimator, so each bias is many standard errors; sanity 55 reproduces the rho
-= 0.8 row with both engines.  The results header therefore prints a note
+estimator, so each bias is many standard errors; the validation suite
+reproduces the rho = 0.8 row with both engines.  The results header therefore prints a note
 whenever a generalized-residual first stage is used.  For a 0/1 treatment whose
 error is plausibly jointly normal with the outcome's, use
 {opt firststage(biprobit)}; for fractional and count treatments no exact analog
 is shipped and the same caveat applies.  Relatedly, the sigma_tilde conversion
 behind {opt gunits(structural)} is derived for a linear first stage and should
-not be applied with these first stages (Table 1 evidence under
+not be applied with these first stages (simulation evidence under
 {ul:Gamma scale} below and {help apexog##gunits:gunits()}).
 
 {pstd}
@@ -777,7 +777,7 @@ x), d/dbeta_d = mean(phi_1), d/dbeta_0 = mean(phi_1 - phi_0) (zero for the
 treatment equation and athrho) against the joint-MLE {cmd:e(V)}; there is no
 generated regressor and hence no Murphy-Topel step.  At gamma = 0 the point
 estimate and SE equal {cmd:margins, dydx(d) predict(pmarg1)} after
-{cmd:biprobit} with {cmd:i.d} (sanity 55).  The UCI and LTZ machinery is
+{cmd:biprobit} with {cmd:i.d}.  The UCI and LTZ machinery is
 unchanged: {opt gmin()}/{opt gmax()}, {opt mu()}/{opt omega()},
 {opt distribution()}, {opt gunits(pr)}, the delta sweep, and the graphs work
 exactly as for the control-function engine.  Fits after the baseline are
@@ -808,8 +808,8 @@ The reported {opt level(#)} interval is the percentile interval of
 {c -(}APE*_i{c )-}.  Because the noise term is symmetric, this equals CHR's
 pivot construction [APE_0 - c_(1-a/2), APE_0 - c_(a/2)] with c_p the
 percentiles of the simulated deviation distribution, and in the linear model
-it reproduces {help plausexog}'s analytic V + A*Omega*A' interval (validated
-in {it:./_sanity/37_ltz_convolution.do}).  The prior-only percentile spread of
+it reproduces {help plausexog}'s analytic V + A*Omega*A' interval (checked
+in the package's validation suite).  The prior-only percentile spread of
 the point APEs {c -(}APE_i{c )-} is reported separately as a sensitivity band;
 it answers "how does the bias-adjusted estimate move as gamma varies over the
 prior", not "what is a confidence interval for the APE".  For multiple
@@ -862,8 +862,8 @@ and {cmd:e(gamma_pr_sim)}; see {help apexog##gunits:gunits()}.
 {pstd}
 {ul:Scope of the sigma_tilde conversion.}  The derivation of (iii) uses a
 linear first stage, whose residual estimates the structural first-stage
-error v, so that sd(eps | CF) = sqrt(1 - rho^2).  The Table 1 Monte Carlos of
-the companion paper ({it:paper/sims/table1/RESULTS.txt}, Session 39: n =
+error v, so that sd(eps | CF) = sqrt(1 - rho^2).  Monte Carlo simulations
+(n =
 5000, R = 1000 per cell, gamma_true = 0, 0.2, 0.5 entered in the structural
 latent index, UCI box [-0.3, 0.3] on the index scale) confirm it for the
 linear first stage -- the Wald interval from the refit at the index-scale
@@ -914,7 +914,7 @@ The Jacobian wrt the full beta-vector (with special corrections for
 closed form and passed through the same V_beta_MT.  The delta-method
 SE then incorporates the generated-regressor uncertainty from the first
 stage.  Verified against hand-coded analytic references to machine
-precision in all three cases (sanity 24/27/28).
+precision in all three cases.
 
 
 {marker references}{...}
@@ -955,9 +955,8 @@ Software Components S458310, Boston College Department of Economics.
 
 {phang}
 Radean, M.  2023.
-ginteff: A new command for estimating and graphing average
-semielasticities and average marginal and interaction effects after a
-nonlinear regression model.  {it:Stata Journal} 23: 1015-1043.
+ginteff: A generalized command for computing interaction effects.
+{it:Stata Journal} 23: 301-335.
 {it:[apexog's aie() option targets the same AIE quantity as ginteff, but adds}
 {it:Conley-Hansen-Rossi sensitivity bounds and a Murphy-Topel correction for}
 {it:the generated regressor.]}

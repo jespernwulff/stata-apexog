@@ -2,6 +2,8 @@
 
 **Sensitivity analysis for the Average Partial Effect (APE) and Average Interaction Effect (AIE) in a control-function probit, under plausibly-exogenous instruments.**
 
+**Website: <https://jespernwulff.github.io/apexog/>** — getting started in Stata and in R, guides to the options, and this command's help file. The R package of the same name, [jespernwulff/apexog](https://github.com/jespernwulff/apexog), gives the same results.
+
 `apexog` extends Conley, Hansen & Rossi's (2012) "Plausibly Exogenous" framework — originally implemented for `ivregress 2sls` in Damian Clarke's [`plausexog`](https://github.com/damiancclarke/plausexog) — to nonlinear control-function settings (Stata's `cfprobit`).  It answers the question:
 
 > *How much exclusion-restriction violation γ ≠ 0 would it take to bring the APE (or AIE) down to zero, or to lose significance?*
@@ -99,7 +101,7 @@ After installing, see:
 help apexog
 ```
 
-The help file documents every option, both methods, the Mata internals (Murphy-Topel derivation), and the three AIE formulas.
+The help file documents every option, both methods, the Mata internals (Murphy-Topel derivation), and the three AIE formulas. It is also on the website, with a worked example: [Get started in Stata](https://jespernwulff.github.io/apexog/articles/stata.html).
 
 ---
 
@@ -122,7 +124,7 @@ The companion to the linear-2SLS version of the same framework is Damian Clarke'
 
 For the AIE quantity computed by `target(c.X#i.d)` etc. when γ = 0, the reference is:
 
-> Radean, M. (2023). ginteff: A new command for estimating and graphing average semielasticities and average marginal and interaction effects after a nonlinear regression model. *Stata Journal*, 23(4), 1015–1043.
+> Radean, M. (2023). ginteff: A generalized command for computing interaction effects. *Stata Journal*, 23(2), 301–335. [DOI:10.1177/1536867X231175253](https://doi.org/10.1177/1536867X231175253)
 
 ---
 
