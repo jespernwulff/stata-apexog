@@ -16,6 +16,44 @@ d   Inference uses a Murphy-Topel two-step sandwich computed in
 d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
 d   margins, dydx() to machine precision.
 d
+d   Features (v0.20.0):
+d     - exact probability-scale output: at every refit apexog reports the
+d       exact Pr-scale value of each instrument's violation (average
+d       discrete change for a 0/1 instrument, average derivative
+d       otherwise, from the refitted model).  UCI: e(grid_pr), printed
+d       beside each gamma range, and the graph's x-axis with gunits(pr);
+d       LTZ: e(gamma_sim), e(gamma_pr_sim), exact mean/sd of the draws.
+d       gunits(pr) input stays first order; no stored result of v0.19.1
+d       changes.
+d
+d   Features (v0.19.1):
+d     - documentation + header warning only (no numeric change): the
+d       sigma_tilde conversion behind gunits(structural) is derived for a
+d       LINEAR first stage.  With firststage(probit|fprobit|poisson) the
+d       Table 1 Monte Carlos of the companion paper put the correct offset
+d       at the UNSCALED structural gamma (Wald coverage at the true
+d       violation 0.936 vs 0.589 for binary d and 0.950 vs 0.881 for
+d       fractional d, raw gamma vs gamma/sqrt(1-rho^2); zero-bias offset
+d       within 5% of the structural gamma), so gunits(structural) should
+d       not be used with those first stages: the results header now prints
+d       a warning line (results unchanged) and the help states the scope,
+d       that e(stilde) is then not a conversion factor, and that e(stilde)
+d       is a baseline-fit quantity that moves with the true violation.
+d
+d   Features (v0.19.0):
+d     - firststage(biprobit): recursive bivariate probit engine for a
+d       single 0/1 endogenous regressor (joint MLE, gamma as an offset in
+d       the outcome equation, ASF discrete-change APE with an MLE
+d       delta-method SE; no generated regressor).  Exact under joint
+d       normality of the structural errors, where the generalized-residual
+d       control function of the probit/fprobit/poisson first stages is only
+d       Wooldridge's (2014, 2015) approximation: large-N bias -2.7%, -11.6%,
+d       -50.6% at error correlations 0.3, 0.5, 0.8 in the validation design.
+d       That caveat is now disclosed in the results header, the help file
+d       (Methods, Input requirements) and the showcase.  gunits(structural)
+d       is identical to the default for this engine (sigma_tilde = 1);
+d       e(rho) returns the baseline error correlation.
+d
 d   Features (v0.18.0):
 d     - input validation: 0/1 outcome check, disjoint variable lists,
 d       gmin<=gmax, first-stage support checks (probit 0/1, fprobit
@@ -88,7 +126,7 @@ d
 d   Features (v0.9.0):
 d     - methods: uci, ltz
 d     - targets: APE (default) or AIE via aie(X Z)
-d     - first stages: linear, probit, fprobit, poisson
+d     - first stages: linear, probit, fprobit, poisson (v0.19: biprobit)
 d     - 1+ endogenous regressors with multi-clause syntax
 d       (d1=z1 z2)(d2=z3) for per-endog instrument sets
 d     - LTZ priors: Gaussian via mu()/omega(), OR distribution()
@@ -106,7 +144,7 @@ d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhu
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d License: MIT (https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE)
 d
-d Distribution-Date: 20260909
+d Distribution-Date: 20261107
 d
 f apexog.ado
 f apexog.sthlp

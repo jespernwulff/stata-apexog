@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.18.0  2026-09-09
+*! Version 0.20.0  2026-11-07
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,131 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.20.0 changelog (vs v0.19.1) -- exact probability-scale OUTPUT.
+*!   gunits(pr) still converts user gamma values to the offset at FIRST order
+*!   (divide by m_phi = mean normal density at the gamma = 0 fit).  New: at
+*!   every refit apexog also reports the EXACT probability-scale value of each
+*!   instrument's violation (new helper _apexoggpr, called by _apexogfit with
+*!   the new gammas()/ivbin() options after a successful fit): for a 0/1
+*!   instrument the average change in Pr(y=1) when it switches 0 -> 1, for any
+*!   other instrument the average derivative mean[phi(eta)] * gamma, both from
+*!   the refitted model over the estimation sample, holding the treatment, the
+*!   control functions and the other instruments' offsets at their observed
+*!   values (companion paper, Section 6).
+*!   - UCI: e(grid_pr) (rows of e(grid) x instruments); the display prints the
+*!     exact range beside each gamma range; with gunits(pr) the graph's x-axis
+*!     is the exact Pr scale.
+*!   - LTZ: e(gamma_sim) (the latent draws) and e(gamma_pr_sim) (their exact
+*!     values); the display prints the draws' exact mean and sd.
+*!   - With a linear first stage, as many instruments as endogenous regressors
+*!     and a continuous instrument, the exact value equals m_phi * gamma
+*!     identically (the offset lies in the span of the regressors and control
+*!     functions, so the refit leaves the fitted index unchanged).
+*!   NO numeric path touched: e(b), e(V), e(grid), bounds, ape_sim/se_sim/
+*!   ape_sim_cnv and the seeded draws are as in v0.19.1 (no random numbers are
+*!   used by the new code).  Validated by _sanity/57_exact_pr_scale.do and the
+*!   57b cross-version dump.
+*!
+*! v0.19.1 changelog (vs v0.19.0) -- documentation + one header warning line.
+*!   NO numeric path touched: every first stage, probit fit, Jacobian, sandwich,
+*!   draw and stored result is byte-identical to v0.19.0 (diff vs
+*!   ./legacy/v0.19.0/apexog.ado = comments, one display flag, two di lines).
+*!   Background (Session 39-table1: paper/sims/table1/RESULTS.txt and
+*!   TEXT_CHANGES.md item 15; paper Sections 4.3/4.4, Appendix B and D.3):
+*!   the sigma_tilde = (1 + b_cf' Var(chat) b_cf)^(-1/2) conversion behind
+*!   gunits(structural) is the index-scale factor for a LINEAR first stage
+*!   only.  For the generalized-residual first stages (probit/fprobit/
+*!   poisson) the structural gamma enters the probit index essentially
+*!   UNSCALED: refitting at the raw structural gamma gives Wald coverage of
+*!   the true APE 0.936 vs 0.589 for the refit at gamma/sqrt(1 - rho^2)
+*!   (binary d, probit first stage, gamma_true = 0.2) and 0.950 vs 0.881
+*!   (fractional d, fprobit first stage), and the interpolated zero-bias
+*!   offset lies within 5% of the structural gamma (0.195/0.518 binary,
+*!   0.200/0.524 fractional, 0.206/0.516 Poisson at gamma_true = 0.2/0.5);
+*!   e(stilde) (0.92/0.92/0.98 at gamma_true = 0) is not that factor there.
+*!   e(stilde) is also a baseline-fit (gamma = 0) quantity that moves with
+*!   the true violation (linear 0.80/0.91/1.00, Poisson 0.98/0.93/0.61 at
+*!   gamma_true = 0/0.2/0.5).  The v0.17.0 wording "first-order approximation
+*!   for generalized-residual first stages" is superseded.
+*!   - WARNING LINE: when gunits(structural) is combined with a probit,
+*!     fprobit, or poisson first stage (any endogenous regressor), both
+*!     results headers print one warning line right after the
+*!     gunits(structural) note, in text style like every other header line
+*!     (so noheader AND quietly suppress it; an error-style line would print
+*!     under quietly and under bootstrap:).  Not an error: behaviour and all stored results
+*!     are unchanged.  No warning with the linear first stage or with
+*!     firststage(biprobit) (sigma_tilde = 1 there).
+*!   - DOCS: apexog.sthlp (gunits() option incl. a new "Linear first stage
+*!     only" paragraph, Input requirements bullet, Stored results e(stilde),
+*!     Methods "Gamma scale" scope paragraph, cross-reference from the
+*!     generalized-residual note) and the in-code comments at step (6b) and
+*!     in the Mata sigma_tilde block; apexog.pkg v0.19.1 block.
+*!   - Validation (2026-10-16, StataNow 19.5): sanity 56 (new) ALL CHECKS
+*!     PASSED -- the warning line appears exactly once for probit/fprobit/
+*!     poisson and the mixed list "probit linear" in both headers, never for
+*!     linear/biprobit/gunits(latent|pr)/noheader/quietly, and e(b)/e(V)/e(grid)/
+*!     bounds/e(stilde)/e(mphi)/draw matrices are identical with and without
+*!     the header; a two-process dump comparison against ./legacy/v0.19.0/
+*!     (56b_cmp_v0190_dump.do: probit, probit+linear and poisson UCI, fprobit
+*!     LTZ, all with gunits(structural)) is byte-identical in %21x; run_all.do
+*!     quick 59/59 PASS, 0 failed (06 APE diff -1.14e-11 / SE diff -1.56e-09,
+*!     48 anchors 0.8368027 / 0.8610515, 42/43/49/50/55 pass).
+*!
+*! v0.19.0 changelog (vs v0.18.0) -- disclosure + recursive bivariate probit engine.
+*!   Background (Session 38 scrutiny review, paper/SCRUTINY_REVIEW_2026-10-15.md
+*!   sections 1.5/3/6.1; evidence paper/sims/scrutiny_2026-10-15/
+*!   binary_d_largeN.do/.log): with firststage(probit) -- and by the same
+*!   logic fprobit/poisson -- the generalized-residual control function is
+*!   Wooldridge's (2014, 2015) APPROXIMATION.  It is consistent for the APE
+*!   under his sufficiency assumption D(eps | z, d) = D(eps | GR), which does
+*!   NOT hold under joint normality of the structural errors (there
+*!   Var(eps | d, z) is heteroskedastic and eps | d, z is not normal); the
+*!   exact estimator for a 0/1 treatment under joint normality is the
+*!   recursive bivariate probit.  Large-N evidence (N = 400,000, sanity-11
+*!   design, gamma = 0, true discrete-change APE 0.21065): two-step GR-CF APE
+*!   (= apexog = cfprobit to all digits) biased -2.7% / -11.6% / -50.6% at
+*!   rho = 0.3 / 0.5 / 0.8; the biprobit ASF APE is within 0.4%.  apexog
+*!   reproduces cfprobit exactly, so this was an inherited, undisclosed
+*!   estimator property, not a computation bug.
+*!   - DISCLOSURE: the results header prints a note whenever a probit/fprobit/
+*!     poisson first stage is in use (both methods); the help file (Methods,
+*!     Input requirements) states the assumption, the bias table, and the
+*!     exact alternative; the showcase example-8 commentary is corrected (its
+*!     Session-31 "conditional-on-CF object" explanation of the 0.1996-vs-
+*!     0.2122 gap was wrong -- the gap is approximation bias).
+*!   - NEW firststage(biprobit): one 0/1 endogenous regressor, linear
+*!     first-stage index.  At each gamma
+*!     apexog fits  biprobit (y = exog d, offset(sum_k gamma_k z_k)) (d = iv exog)
+*!     and takes the APE as the ASF discrete change mean(Phi(eta|d=1) -
+*!     Phi(eta|d=0)) from the outcome equation, with its delta-method SE from
+*!     biprobit's e(V) (vce(robust) or vce(cluster), as requested).  No
+*!     generated regressor, hence no Murphy-Topel step.  Routed through the
+*!     unchanged UCI/LTZ loops: gmin/gmax, mu/omega, distribution(),
+*!     gunits(pr), the delta sweep and all graphs work as before.
+*!     gunits(structural) is accepted and identical to the default: the
+*!     outcome-equation error already has unit variance, so sigma_tilde = 1
+*!     (e(stilde) = 1, stated in the header).  Fits after the baseline are
+*!     warm-started from the baseline e(b) (from(_apexogBP_B0, copy)); the
+*!     baseline itself is a cold fit.  Not available with several endogenous
+*!     regressors or an AIE target (rc 198); estimator(biprobit) points to
+*!     firststage(biprobit).  e(estimator) = "biprobit", e(vce) = "MLE",
+*!     e(rho) = baseline rho_hat.  _apexogfit gained engine(); chat0list()/
+*!     aweightlist() became optional (unused by this engine).
+*!   - Validation (sanity 55_biprobit_engine.do, ALL CHECKS PASSED
+*!     2026-10-15 on StataNow 19.5): at gamma = 0 the APE and SE equal
+*!     margins, dydx(d) predict(pmarg1) after biprobit with i.d to machine
+*!     precision (APE diff 2.8e-17, SE reldif 1.5e-16); N = 400,000, rho =
+*!     0.8, same seed as the scrutiny run: biprobit engine 0.21083 (+0.09% vs
+*!     the true 0.21065) while the probit-first-stage engine gives 0.10411
+*!     (-50.6%), both equal to the scrutiny log; a degenerate-prior LTZ
+*!     collapses on the UCI value at the same gamma (<1e-6) with the convolved
+*!     CI reproducing the Wald CI; warm == cold to 1e-5; gunits(structural) ==
+*!     default to 1e-12 and gunits(pr) == latent/m_phi to 1e-8; coverage MC
+*!     (R = 300, n = 2000, gamma_true = 0.1): the Wald interval at the true
+*!     gamma covers 0.963 (MC se 0.013), the gamma = 0 baseline 0.077.  The
+*!     control-function paths are untouched (run_all.do quick re-run the
+*!     same day; see the Session-39 log in CLAUDE.md).
 *!
 *! v0.18.0 changelog (vs v0.17.0) -- input validation, robustness, housekeeping.
 *!   STATUS: VALIDATED 2026-09-09 on StataNow 19.5 SE.  Written 2026-09-04 as a
@@ -872,6 +997,9 @@ program apexog, eclass
     * (2) Validate options and v0.2 scope restrictions
     *==========================================================================
     if "`estimator'" == "" local estimator "cfprobit"
+    if "`estimator'" == "biprobit" {
+        _apexogerr "The recursive bivariate probit is requested with firststage(biprobit); estimator() stays at its default cfprobit."
+    }
     if "`estimator'" != "cfprobit" {
         _apexogerr "v0.2 supports only estimator(cfprobit); you asked for estimator(`estimator')."
     }
@@ -892,8 +1020,8 @@ program apexog, eclass
         }
         forvalues k = 1/`n_fs' {
             local fst_k : word `k' of `firststage'
-            if !inlist("`fst_k'", "linear", "probit", "fprobit", "poisson") {
-                _apexogerr "Unknown firststage type '`fst_k''.  Valid: linear, probit, fprobit, poisson."
+            if !inlist("`fst_k'", "linear", "probit", "fprobit", "poisson", "biprobit") {
+                _apexogerr "Unknown firststage type '`fst_k''.  Valid: linear, probit, fprobit, poisson, biprobit."
             }
         }
     }
@@ -906,7 +1034,7 @@ program apexog, eclass
         local _type_k ""
         if "`cfopts_for_endog_`k''" != "" {
             foreach _w of local cfopts_for_endog_`k' {
-                if inlist("`_w'", "linear", "probit", "fprobit", "poisson") {
+                if inlist("`_w'", "linear", "probit", "fprobit", "poisson", "biprobit") {
                     local _type_k "`_w'"
                 }
             }
@@ -932,6 +1060,36 @@ program apexog, eclass
     }
     local firststage_resolved : list clean firststage_resolved
     local firststage "`firststage_resolved'"
+    * v0.19.1: flag any generalized-residual first stage (probit/fprobit/
+    * poisson).  The sigma_tilde conversion behind gunits(structural) is a
+    * linear-first-stage result, so the headers print a warning line when
+    * the two are combined.  Display only: no computation uses this flag.
+    local _grfs = 0
+    foreach _f of local firststage {
+        if inlist("`_f'", "probit", "fprobit", "poisson") local _grfs = 1
+    }
+
+    *--- v0.19: engine selection ----------------------------------------------
+    * firststage(biprobit) replaces the two-step control-function estimator by
+    * the recursive bivariate probit: joint MLE of depvar and ONE 0/1
+    * endogenous regressor under bivariate normality, with the gamma-offset in
+    * the outcome equation.  No control function, no Murphy-Topel step.  The
+    * control-function engine ("cf") is byte-identical to v0.18.0.
+    local engine    "cf"
+    local _est_name "cfprobit"
+    local _vce_name "Murphy-Topel"
+    local _n_bp = 0
+    forvalues k = 1/`count2' {
+        if "`firststage_`k''" == "biprobit" local ++_n_bp
+    }
+    if `_n_bp' > 0 {
+        if `count2' > 1 {
+            _apexogerr "firststage(biprobit) supports exactly ONE endogenous regressor (the model has `count2'): it fits the recursive bivariate probit of `yvar' and a single 0/1 treatment.  Use the control-function first stages (linear/probit/fprobit/poisson) with several endogenous regressors."
+        }
+        local engine    "biprobit"
+        local _est_name "biprobit"
+        local _vce_name "MLE"
+    }
 
     *--- Phase 2: parse target() option ---------------------------------------
     * target() can specify either APE targets or an AIE target:
@@ -1395,6 +1553,10 @@ program apexog, eclass
         local aie_case = 0
     }
 
+    if "`engine'" == "biprobit" & `aie_active' {
+        _apexogerr "firststage(biprobit) targets the APE of the single 0/1 endogenous regressor; the AIE target (aie() / target(c.X#i.d)) is not available with the bivariate-probit engine."
+    }
+
     *==========================================================================
     * cfinteract: include products of the control functions in the main probit
     * (replicates cfprobit's cfinteract = c.chat1##c.chat2... minus the mains).
@@ -1482,6 +1644,13 @@ program apexog, eclass
         else if "`fst'" == "poisson" {
             qui count if `touse' & `dj' < 0
             if r(N) > 0 _apexogerr "firststage(poisson) requires a nonnegative endogenous regressor, but `dj' has negative values."
+        }
+        if "`fst'" == "biprobit" {
+            * v0.19: no control function -- the recursive bivariate probit is
+            * fit jointly in _apexogfit at every gamma.  Only the support check.
+            qui count if `touse' & !inlist(`dj', 0, 1)
+            if r(N) > 0 _apexogerr "firststage(biprobit) requires a 0/1 endogenous regressor, but `dj' has other values."
+            continue
         }
         if "`fst'" == "linear" {
             qui regress `dj' `iv_for_endog_`j'' `exog_for_endog_`j'' if `touse', `vce_opt'
@@ -1623,16 +1792,28 @@ program apexog, eclass
     tempvar offvar
     qui gen double `offvar' = 0 if `touse'
 
+    * v0.20: which (cleaned) instruments are 0/1 in the estimation sample?
+    * Decides how _apexoggpr reports the exact Pr-scale value of a violation
+    * (average discrete change for 0/1 instruments, average derivative else).
+    local ivbin ""
+    foreach z of local varlist_iv {
+        capture assert `z' == 0 | `z' == 1 if `touse'
+        local ivbin "`ivbin' `=(_rc == 0)'"
+    }
+
     *==========================================================================
     * (6) Baseline fit (gamma = 0)
     *==========================================================================
     qui replace `offvar' = 0 if `touse'
+    * v0.19: the biprobit engine warm-starts every later fit from the baseline
+    * e(b); make sure no stale matrix from an interrupted run is picked up.
+    capture matrix drop _apexogBP_B0
     _apexogfit, touse(`touse')                                                ///
         yvar(`yvar') endoglist(`varlist2') chat0list(`chat0_list')          ///
         offvar(`offvar') aweightlist(`A_list')                              ///
         exoglist(`varlist1') ivlist(`varlist_iv')                           ///
         clustvar(`clustvar') vcetype(`vcetype')                             ///
-        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list')                         ///
+        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine')                         ///
         level(`level') `debug'
     * First-endog scalars (back-compat)
     local baseline_ape = r(ape)
@@ -1663,11 +1844,22 @@ program apexog, eclass
     *      The probit index normalizes the CONDITIONAL error to 1, so index
     *      quantities = structural quantities / sigma_tilde.  Same machinery
     *      as gunits(pr) with a different conversion factor.
+    *      v0.19.1: this conversion is derived for a LINEAR first stage.  For
+    *      the generalized-residual first stages (probit/fprobit/poisson) the
+    *      Table 1 rebuild (paper/sims/table1, Session 39) puts the correct
+    *      offset at the UNSCALED structural gamma, so the headers warn when
+    *      gunits(structural) meets one of them (flag _grfs); the arithmetic
+    *      below is deliberately unchanged.
     *==========================================================================
     scalar _apexogMPHI0   = r(mphi)
     scalar _apexogSTILDE0 = r(stilde)
     * Cross-target MT covariance of the baseline estimates (for ereturn post)
     matrix _apexogVTGT0 = r(vtgt)
+    if "`engine'" == "biprobit" {
+        * baseline endogeneity correlation of the recursive bivariate probit
+        capture scalar _apexogBPRHO0 = scalar(_apexogBPRHO)
+        if _rc scalar _apexogBPRHO0 = .
+    }
     if "`gunits'" == "pr" | "`gunits'" == "structural" {
         if "`gunits'" == "pr" {
             if _apexogMPHI0 >= . {
@@ -1748,6 +1940,13 @@ program apexog, eclass
             else            local colnames "`colnames' ape_`_lab_`j'' lo_`_lab_`j'' hi_`_lab_`j''"
         }
         matrix colnames _apexogGRID = `colnames'
+        * v0.20: exact Pr-scale value of each instrument's violation per row
+        matrix _apexogGRIDPR = J(`total_pts', `count_iv', .)
+        local colnames ""
+        forvalues k = 1/`count_iv' {
+            local colnames "`colnames' gpr`k'"
+        }
+        matrix colnames _apexogGRIDPR = `colnames'
 
         * Per-target union trackers
         local lo_union = .
@@ -1769,8 +1968,10 @@ program apexog, eclass
             * Build offset variable: gen offvar = sum_k g_k * Z_k
             qui replace `offvar' = 0 if `touse'
             local k = 1
+            local _gams ""
             foreach z of local varlist_iv {
                 qui replace `offvar' = `offvar' + `g`k''*`z' if `touse'
+                local _gams "`_gams' `g`k''"
                 local ++k
             }
 
@@ -1779,14 +1980,18 @@ program apexog, eclass
                 offvar(`offvar') aweightlist(`A_list')                          ///
                 exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                 clustvar(`clustvar') vcetype(`vcetype')                         ///
-                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list')                     ///
+                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine')                     ///
+                gammas(`_gams') ivbin(`ivbin')                                  ///
                 level(`level') `debug'
             matrix _apexogITER_APE = r(ape_vec)
             matrix _apexogITER_LO  = r(lo_vec)
             matrix _apexogITER_HI  = r(hi_vec)
+            capture matrix _apexogITER_GPR = r(gpr_vec)
+            local _gpr_ok = (_rc == 0)
 
             forvalues k = 1/`count_iv' {
                 matrix _apexogGRID[`iter', `k'] = `g`k''
+                if `_gpr_ok' matrix _apexogGRIDPR[`iter', `k'] = _apexogITER_GPR[`k', 1]
             }
             forvalues j = 1/`n_targets' {
                 local col_ape = `count_iv' + 3*(`j'-1) + 1
@@ -1815,7 +2020,7 @@ program apexog, eclass
             else {
                 di as text "Plausibly-exogenous APE bounds (CHR 2012, UCI method)"
             }
-            di as text "Estimator: cfprobit  |  First stage: `firststage'  |  SE: Murphy-Topel  |  N = `N'"
+            _apexoghdr, engine(`engine') firststage(`firststage') n(`N')
             if `aie_active' {
                 if "`target_aie_spec'" != "" {
                     di as text "Target:    Average Interaction Effect (`target_aie_spec')"
@@ -1861,19 +2066,33 @@ program apexog, eclass
             di as text "           1 structural-latent unit of gamma = " ///
                 %6.4f 1/scalar(_apexogSTILDE0) " latent-index units" ///
                 "  (sigma_tilde = " %6.4f scalar(_apexogSTILDE0) ")"
+            if "`engine'" == "biprobit" {
+                di as text "           biprobit: the outcome-equation error has unit variance, so the"
+                di as text "           structural-latent and index scales coincide (sigma_tilde = 1)."
+                di as text "           rho(eps_y, eps_d) at the baseline fit = " %7.4f scalar(_apexogBPRHO0)
+            }
             if "`gunits'" == "pr" {
                 di as text "           gunits(pr): user gamma values were probability points;" ///
                     " divided by m_phi.  Values below are latent units."
+                di as text "           (first order; exact Pr-scale equivalents shown alongside)"
             }
             if "`gunits'" == "structural" {
                 di as text "           gunits(structural): user gamma values were structural-latent" ///
                     " units; divided by sigma_tilde.  Values below are latent-index units."
+                if `_grfs' {
+                    * v0.19.1: the conversion is a linear-first-stage result
+                    di as text "Warning:   sigma_tilde conversion derived for a LINEAR first stage (see help)."
+                }
             }
             di as text " "
             di as text "UCI union over gamma grid (`grid' point(s) per IV):"
             forvalues k = 1/`count_iv' {
                 local zname : word `k' of `ivlabels'
-                di as text "    gamma_`zname' range  : [" %7.4f `gmin`k'' ", " %7.4f `gmax`k'' "]"
+                * v0.20: the same range on the exact Pr scale (over the refits)
+                mata: st_local("_prlo", strofreal(min(select(st_matrix("_apexogGRIDPR")[., `k'], st_matrix("_apexogGRIDPR")[., `k'] :< .)), "%21.15g"))
+                mata: st_local("_prhi", strofreal(max(select(st_matrix("_apexogGRIDPR")[., `k'], st_matrix("_apexogGRIDPR")[., `k'] :< .)), "%21.15g"))
+                di as text "    gamma_`zname' range  : [" %7.4f `gmin`k'' ", " %7.4f `gmax`k'' "]" ///
+                    "   exact Pr scale: [" %7.4f `_prlo' ", " %7.4f `_prhi' "]"
             }
             di as text " "
             if `aie_active' {
@@ -1896,8 +2115,18 @@ program apexog, eclass
             preserve
             clear
             svmat _apexogGRID, names(col)
-            sort g1
+            svmat _apexogGRIDPR, names(col)
             local zname : word 1 of `ivlabels'
+            * v0.20: with gunits(pr) the x-axis is the exact Pr scale of the refits
+            if "`gunits'" == "pr" {
+                local _gx  "gpr1"
+                local _gxt "gamma_`zname' (exact Pr points)"
+            }
+            else {
+                local _gx  "g1"
+                local _gxt "gamma_`zname'"
+            }
+            sort `_gx'
             if `aie_active' {
                 * (v0.18 fix: the svmat columns are aie_*, not ape_*)
                 local _ape_lab "aie_`_labX'_`_labZ'"
@@ -1918,12 +2147,12 @@ program apexog, eclass
                 local graphoptions ///
                     title("`_title'") ///
                     ytitle("`_ytitle'")                               ///
-                    xtitle("gamma_`zname'")                            ///
+                    xtitle("`_gxt'")                                   ///
                     legend(order(1 "Lower `_lvlg'% CI" 2 "Upper `_lvlg'% CI" 3 "Point estimate"))
             }
-            twoway (line `_lo_lab' g1, lpattern(dash) lcolor(black))   ///
-                   (line `_hi_lab' g1, lpattern(dash) lcolor(black))   ///
-                   (line `_ape_lab' g1, lcolor(blue)),                 ///
+            twoway (line `_lo_lab' `_gx', lpattern(dash) lcolor(black))   ///
+                   (line `_hi_lab' `_gx', lpattern(dash) lcolor(black))   ///
+                   (line `_ape_lab' `_gx', lcolor(blue)),                 ///
                    yline(0, lpattern(dot) lcolor(gray))                  ///
                    `graphoptions'
             restore
@@ -1965,6 +2194,7 @@ program apexog, eclass
         ereturn scalar level         = `level'
         ereturn scalar mphi          = scalar(_apexogMPHI0)
         ereturn scalar stilde        = scalar(_apexogSTILDE0)
+        if "`engine'" == "biprobit" ereturn scalar rho = scalar(_apexogBPRHO0)
         ereturn local  gunits        "`gunits'"
         ereturn scalar baseline_ape  = `baseline_ape'
         ereturn scalar baseline_se   = `baseline_se'
@@ -1993,6 +2223,7 @@ program apexog, eclass
             }
         }
         ereturn matrix grid               = _apexogGRID
+        ereturn matrix grid_pr            = _apexogGRIDPR
         ereturn matrix baseline_ape_vec   = _apexogBASE_APE
         ereturn matrix baseline_se_vec    = _apexogBASE_SE
         ereturn matrix baseline_lo_vec    = _apexogBASE_LO
@@ -2009,9 +2240,9 @@ program apexog, eclass
         ereturn local cmd            "apexog"
         ereturn local cmdline        `"apexog `_cmdline_full'"'
         ereturn local method         "uci"
-        ereturn local estimator      "cfprobit"
+        ereturn local estimator      "`_est_name'"
         ereturn local firststage     "`firststage'"
-        ereturn local vce            "Murphy-Topel"
+        ereturn local vce            "`_vce_name'"
         ereturn local depvar         "`yvar'"
         ereturn local endog          "`varlist2'"
         ereturn local exog           "`varlist1'"
@@ -2046,6 +2277,17 @@ program apexog, eclass
         }
         matrix colnames _apexogAPESIM = `sim_colnames'
         matrix colnames _apexogSESIM  = `sim_colnames'
+        * v0.20: the latent draws and their exact Pr-scale values
+        matrix _apexogGSIM   = J(`iterations', `count_iv', .)
+        matrix _apexogGPRSIM = J(`iterations', `count_iv', .)
+        local _gcn ""
+        local _gprcn ""
+        forvalues k = 1/`count_iv' {
+            local _gcn   "`_gcn' g`k'"
+            local _gprcn "`_gprcn' gpr`k'"
+        }
+        matrix colnames _apexogGSIM   = `_gcn'
+        matrix colnames _apexogGPRSIM = `_gprcn'
 
         * Build the donor matrix for distribution(special) now that touse exists.
         if "`special_pending'" == "1" {
@@ -2072,9 +2314,12 @@ program apexog, eclass
             * it's the appropriate Stata RNG expression).
             qui replace `offvar' = 0 if `touse'
             local k = 1
+            local _gams ""
             foreach z of local varlist_iv {
                 local g_draw = `gammaCall`k''
                 qui replace `offvar' = `offvar' + `g_draw'*`z' if `touse'
+                matrix _apexogGSIM[`iter', `k'] = `g_draw'
+                local _gams "`_gams' `g_draw'"
                 local ++k
             }
 
@@ -2083,7 +2328,8 @@ program apexog, eclass
                 offvar(`offvar') aweightlist(`A_list')                          ///
                 exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                 clustvar(`clustvar') vcetype(`vcetype')                         ///
-                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list')                     ///
+                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine')                     ///
+                gammas(`_gams') ivbin(`ivbin')                                  ///
                 level(`level') `debug'
 
             matrix _apexogITER_APE = r(ape_vec)
@@ -2091,6 +2337,12 @@ program apexog, eclass
             forvalues j = 1/`n_targets' {
                 matrix _apexogAPESIM[`iter', `j'] = _apexogITER_APE[`j', 1]
                 matrix _apexogSESIM[`iter', `j']  = _apexogITER_SE[`j', 1]
+            }
+            capture matrix _apexogITER_GPR = r(gpr_vec)
+            if _rc == 0 {
+                forvalues k = 1/`count_iv' {
+                    matrix _apexogGPRSIM[`iter', `k'] = _apexogITER_GPR[`k', 1]
+                }
             }
 
             if mod(`iter', 100) == 0 {
@@ -2114,7 +2366,7 @@ program apexog, eclass
             else {
                 di as text "Plausibly-exogenous APE bounds (CHR 2012, LTZ method, `ltz_mode' prior)"
             }
-            di as text "Estimator: cfprobit  |  First stage: `firststage'  |  SE: Murphy-Topel  |  N = `N'"
+            _apexoghdr, engine(`engine') firststage(`firststage') n(`N')
             if `aie_active' {
                 if "`target_aie_spec'" != "" {
                     di as text "Target:    Average Interaction Effect (`target_aie_spec')"
@@ -2155,13 +2407,23 @@ program apexog, eclass
             di as text "           1 structural-latent unit of gamma = " ///
                 %6.4f 1/scalar(_apexogSTILDE0) " latent-index units" ///
                 "  (sigma_tilde = " %6.4f scalar(_apexogSTILDE0) ")"
+            if "`engine'" == "biprobit" {
+                di as text "           biprobit: the outcome-equation error has unit variance, so the"
+                di as text "           structural-latent and index scales coincide (sigma_tilde = 1)."
+                di as text "           rho(eps_y, eps_d) at the baseline fit = " %7.4f scalar(_apexogBPRHO0)
+            }
             if "`gunits'" == "pr" {
                 di as text "           gunits(pr): user gamma values were probability points;" ///
                     " divided by m_phi.  Values below are latent units."
+                di as text "           (first order; exact Pr-scale equivalents shown alongside)"
             }
             if "`gunits'" == "structural" {
                 di as text "           gunits(structural): user gamma values were structural-latent" ///
                     " units; divided by sigma_tilde.  Values below are latent-index units."
+                if `_grfs' {
+                    * v0.19.1: the conversion is a linear-first-stage result
+                    di as text "Warning:   sigma_tilde conversion derived for a LINEAR first stage (see help)."
+                }
             }
             di as text " "
             di as text "LTZ prior:"
@@ -2173,6 +2435,12 @@ program apexog, eclass
                 else {
                     di as text "    gamma_`zname' ~ `distname'   draw expr: `gammaCall`k''"
                 }
+                * v0.20: the draws on the exact Pr scale (over the refits)
+                mata: _apexog_v = select(st_matrix("_apexogGPRSIM")[., `k'], st_matrix("_apexogGPRSIM")[., `k'] :< .)
+                mata: st_local("_prm", strofreal(mean(_apexog_v), "%21.15g"))
+                mata: st_local("_prs", strofreal(sqrt(variance(_apexog_v)), "%21.15g"))
+                mata: mata drop _apexog_v
+                di as text "      exact Pr scale of the draws: mean " %7.4f `_prm' ", sd " %7.4f `_prs'
             }
             di as text "    iterations         = `iterations'"
             di as text " "
@@ -2273,7 +2541,7 @@ program apexog, eclass
                         offvar(`offvar') aweightlist(`A_list')                          ///
                         exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                         clustvar(`clustvar') vcetype(`vcetype')                         ///
-                        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') ///
+                        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine') ///
                         level(`level')
                     matrix _apexogITER_APE = r(ape_vec)
                     matrix _apexogITER_SE  = r(se_vec)
@@ -2390,6 +2658,7 @@ program apexog, eclass
         ereturn scalar baseline_se   = `baseline_se'
         ereturn scalar mphi          = scalar(_apexogMPHI0)
         ereturn scalar stilde        = scalar(_apexogSTILDE0)
+        if "`engine'" == "biprobit" ereturn scalar rho = scalar(_apexogBPRHO0)
         ereturn local  gunits        "`gunits'"
         if `n_sweep' > 0 {
             ereturn matrix sweep = _apexogSWEEP
@@ -2421,6 +2690,8 @@ program apexog, eclass
         }
         ereturn matrix ape_sim       = _apexogAPESIM
         ereturn matrix se_sim        = _apexogSESIM
+        ereturn matrix gamma_sim     = _apexogGSIM
+        ereturn matrix gamma_pr_sim  = _apexogGPRSIM
         ereturn matrix ape_sim_cnv   = _apexogSIMCNV
         ereturn matrix lo_pct_vec    = _apexogLO_PCT
         ereturn matrix hi_pct_vec    = _apexogHI_PCT
@@ -2439,9 +2710,9 @@ program apexog, eclass
         ereturn local cmd            "apexog"
         ereturn local cmdline        `"apexog `_cmdline_full'"'
         ereturn local method         "ltz"
-        ereturn local estimator      "cfprobit"
+        ereturn local estimator      "`_est_name'"
         ereturn local firststage     "`firststage'"
-        ereturn local vce            "Murphy-Topel"
+        ereturn local vce            "`_vce_name'"
         ereturn local depvar         "`yvar'"
         ereturn local endog          "`varlist2'"
         ereturn local exog           "`varlist1'"
@@ -2461,6 +2732,9 @@ end
 
 *==============================================================================
 * _apexogfit: workhorse.  At a given gamma-offset (already baked into `offvar'):
+*   (v0.19) engine(biprobit): fit `biprobit (y = X d, offset(offvar)) (d = Z X)'
+*   and compute the ASF discrete-change APE + MLE delta-method SE in Mata
+*   (_apexogfit_bp_ape); same r() contract as below.  Otherwise:
 *   1. Fit `probit y X d chat0, offset(offvar) vce(robust)'
 *   2. Pass results to Mata: compute Murphy-Topel-corrected V_beta, then
 *      APE delta-method point estimate and SE.
@@ -2469,13 +2743,14 @@ end
 program _apexogfit, rclass
     syntax,                                                                 ///
         touse(string)                                                       ///
-        yvar(string) endoglist(string) chat0list(string) offvar(string)     ///
-        aweightlist(string)                                                 ///
+        yvar(string) endoglist(string) offvar(string)                       ///
         exoglist(string) ivlist(string)                                     ///
         vcetype(string)                                                     ///
         level(real)                                                         ///
-        [clustvar(string) aiex(string) aiez(string) aiexz(string)           ///
-         aiecase(integer 0) cfprodlist(string) debug]
+        [chat0list(string) aweightlist(string)                              ///
+         clustvar(string) aiex(string) aiez(string) aiexz(string)           ///
+         aiecase(integer 0) cfprodlist(string) engine(string)               ///
+         gammas(string) ivbin(string) debug]
 
     if "`debug'" != "" {
         qui sum `offvar' if `touse'
@@ -2486,6 +2761,111 @@ program _apexogfit, rclass
     * Build the vce string from vcetype + clustvar
     if "`vcetype'" == "cluster" local _vce = "vce(cluster `clustvar')"
     else                         local _vce = "vce(robust)"
+
+    *--- v0.19: recursive bivariate probit engine ------------------------------
+    * firststage(biprobit): fit the outcome and the 0/1 treatment JOINTLY,
+    *     biprobit (y = exog d, offset(off)) (d = iv exog)
+    * with the gamma-offset in the outcome equation.  The APE (ASF discrete
+    * change) and its delta-method SE come from Mata (_apexogfit_bp_ape); there
+    * is no control function and no Murphy-Topel step.  Fits after the baseline
+    * are warm-started from the baseline e(b) (_apexogBP_B0: created by the
+    * first successful fit of the run, dropped by _apexogclean at exit).
+    if "`engine'" == "biprobit" {
+        local _n_endog : word count `endoglist'
+        local _from ""
+        capture confirm matrix _apexogBP_B0
+        if _rc == 0 local _from "from(_apexogBP_B0, copy)"
+        capture {
+            if "`debug'" != "" {
+                biprobit (`yvar' = `exoglist' `endoglist', offset(`offvar'))      ///
+                         (`endoglist' = `ivlist' `exoglist') if `touse', `_vce' `_from'
+            }
+            else {
+                quietly biprobit (`yvar' = `exoglist' `endoglist', offset(`offvar')) ///
+                         (`endoglist' = `ivlist' `exoglist') if `touse', `_vce' `_from'
+            }
+        }
+        local _rc = _rc
+        local _bad ""
+        if `_rc' != 0 local _bad "biprobit failed (rc=`_rc')"
+        else {
+            qui count if `touse'
+            if e(converged) == 0 local _bad "biprobit did not converge"
+            else if e(N) < r(N)  local _bad "biprobit used `e(N)' of `r(N)' obs"
+            else if [#1]_b[`endoglist'] == 0 & [#1]_se[`endoglist'] == 0 {
+                local _bad "`endoglist' omitted from the outcome equation (collinear)"
+            }
+        }
+        if "`_bad'" != "" {
+            qui sum `offvar' if `touse'
+            di as text "  [warn] `_bad' for offvar mean=" %9.6f r(mean) "; returning missing for this fit."
+        matrix _apexogAPE_vec = J(`_n_endog', 1, .)
+        matrix _apexogSE_vec  = J(`_n_endog', 1, .)
+        matrix _apexogLO_vec  = J(`_n_endog', 1, .)
+        matrix _apexogHI_vec  = J(`_n_endog', 1, .)
+        return matrix ape_vec = _apexogAPE_vec
+        return matrix se_vec  = _apexogSE_vec
+        return matrix lo_vec  = _apexogLO_vec
+        return matrix hi_vec  = _apexogHI_vec
+        return scalar ape     = .
+        return scalar se      = .
+        return scalar lo      = .
+        return scalar hi      = .
+        return scalar mphi    = .
+        return scalar stilde  = .
+        matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
+        return matrix vtgt    = _apexogVTGT
+        exit
+        }
+        matrix _apexogPR_B = e(b)
+        matrix _apexogPR_V = e(V)
+        if "`_from'" == "" matrix _apexogBP_B0 = e(b)
+        scalar _apexogBPRHO = e(rho)
+        capture noisily ///
+        mata: _apexogfit_bp_ape("`endoglist'", "`offvar'", "`exoglist'",          ///
+                                "_apexogAPE_vec", "_apexogSE_vec",                  ///
+                                "_apexogLO_vec",  "_apexogHI_vec", `level')
+        if _rc != 0 {
+            di as error "[_apexogfit] Mata biprobit APE failed (rc=`_rc')."
+        matrix _apexogAPE_vec = J(`_n_endog', 1, .)
+        matrix _apexogSE_vec  = J(`_n_endog', 1, .)
+        matrix _apexogLO_vec  = J(`_n_endog', 1, .)
+        matrix _apexogHI_vec  = J(`_n_endog', 1, .)
+        return matrix ape_vec = _apexogAPE_vec
+        return matrix se_vec  = _apexogSE_vec
+        return matrix lo_vec  = _apexogLO_vec
+        return matrix hi_vec  = _apexogHI_vec
+        return scalar ape     = .
+        return scalar se      = .
+        return scalar lo      = .
+        return scalar hi      = .
+        return scalar mphi    = .
+        return scalar stilde  = .
+        matrix _apexogVTGT    = J(`_n_endog', `_n_endog', .)
+        return matrix vtgt    = _apexogVTGT
+        exit
+        }
+        * v0.20: exact Pr-scale value of each instrument's violation at this
+        * refit (before any `return': _apexoggpr is r-class).
+        if "`gammas'" != "" {
+            _apexoggpr, touse(`touse') ivlist(`ivlist') gammas(`gammas') ivbin(`ivbin') eq(xb1)
+            matrix _apexogGPR_vec = r(gpr)
+        }
+        return scalar ape    = _apexogAPE_vec[1, 1]
+        return scalar se     = _apexogSE_vec[1, 1]
+        return scalar lo     = _apexogLO_vec[1, 1]
+        return scalar hi     = _apexogHI_vec[1, 1]
+        return scalar mphi   = scalar(_apexogMPHI)
+        return scalar stilde = scalar(_apexogSTILDE)
+        if "`gammas'" != "" return matrix gpr_vec = _apexogGPR_vec
+        if "`debug'" != "" di as text "[debug _apexogfit] biprobit APE=" %12.7f _apexogAPE_vec[1,1] " SE=" %12.7f _apexogSE_vec[1,1] " rho=" %8.4f scalar(_apexogBPRHO)
+        return matrix vtgt    = _apexogVTGT
+        return matrix ape_vec = _apexogAPE_vec
+        return matrix se_vec  = _apexogSE_vec
+        return matrix lo_vec  = _apexogLO_vec
+        return matrix hi_vec  = _apexogHI_vec
+        exit
+    }
 
     * Run probit with the offset.  Use `capture noisily quietly' pattern.
     capture {
@@ -2604,8 +2984,16 @@ program _apexogfit, rclass
         exit
     }
 
+    * v0.20: exact Pr-scale value of each instrument's violation at this
+    * refit (before any `return': _apexoggpr is r-class).
+    if "`gammas'" != "" {
+        _apexoggpr, touse(`touse') ivlist(`ivlist') gammas(`gammas') ivbin(`ivbin') eq(xb)
+        matrix _apexogGPR_vec = r(gpr)
+    }
+
     * Back-compat: also expose the FIRST endog's APE/SE as scalars for
     * existing callers that index r(ape), r(se), r(lo), r(hi).
+    if "`gammas'" != "" return matrix gpr_vec = _apexogGPR_vec
     return scalar ape = _apexogAPE_vec[1, 1]
     return scalar se  = _apexogSE_vec[1, 1]
     return scalar lo  = _apexogLO_vec[1, 1]
@@ -2623,11 +3011,79 @@ program _apexogfit, rclass
 end
 
 *==============================================================================
+* _apexoggpr (v0.20): the EXACT probability-scale value of each instrument's
+* violation at the current refit.  Called by _apexogfit right after a
+* successful fit, while e() still holds the probit (eq(xb)) or the bivariate
+* probit (eq(xb1)) with the offset sum_k gamma_k z_k.  eta = the fitted outcome
+* index INCLUDING the offset and the control functions; for instrument k:
+*   binary z_k (0/1 in the estimation sample):
+*       mean[ Phi(eta - g_k z_k + g_k) - Phi(eta - g_k z_k) ]
+*     = the average change in Pr(y=1) when z_k switches 0 -> 1, holding the
+*       treatment, the control functions and the other instruments' offsets
+*       at their observed values (cf. the discrete-change APE);
+*   otherwise:  mean[ phi(eta) ] * g_k   (the average derivative).
+* The first-order value gunits(pr) uses is m_phi(baseline) * g_k.  Uses no
+* random numbers, so seeded LTZ draws are unaffected.
+*==============================================================================
+program _apexoggpr, rclass
+    syntax, touse(string) ivlist(string) gammas(string) ivbin(string) eq(string)
+    tempvar eta w
+    tempname G
+    if "`eq'" == "xb1" qui predict double `eta' if `touse', xb1
+    else               qui predict double `eta' if `touse', xb
+    local K : word count `ivlist'
+    matrix `G' = J(`K', 1, .)
+    qui gen double `w' = . if `touse'
+    forvalues k = 1/`K' {
+        local z : word `k' of `ivlist'
+        local g : word `k' of `gammas'
+        local b : word `k' of `ivbin'
+        if `b' {
+            qui replace `w' = normal(`eta' - (`g')*`z' + (`g')) - normal(`eta' - (`g')*`z') if `touse'
+        }
+        else {
+            qui replace `w' = normalden(`eta') * (`g') if `touse'
+        }
+        qui summarize `w' if `touse', meanonly
+        matrix `G'[`k', 1] = r(mean)
+    }
+    return matrix gpr = `G'
+end
+
+*==============================================================================
 * _apexogerr: pretty error message
 *==============================================================================
 program _apexogerr
     di as error `"`0'"'
     exit 198
+end
+
+*==============================================================================
+* _apexoghdr (v0.19): the "Estimator:" header line, shared by the UCI and LTZ
+* displays, plus the disclosure note for generalized-residual first stages.
+*==============================================================================
+program _apexoghdr
+    syntax, engine(string) firststage(string) n(string)
+    if "`engine'" == "biprobit" {
+        di as text "Estimator: biprobit (recursive bivariate probit, MLE)  |  SE: delta method  |  N = `n'"
+        di as text "           outcome and 0/1 treatment fit jointly under bivariate normality;"
+        di as text "           gamma is an offset in the outcome equation; no generated regressor."
+    }
+    else {
+        di as text "Estimator: cfprobit  |  First stage: `firststage'  |  SE: Murphy-Topel  |  N = `n'"
+        local _gr = 0
+        foreach _f of local firststage {
+            if inlist("`_f'", "probit", "fprobit", "poisson") local _gr = 1
+        }
+        if `_gr' {
+            di as text "Note:      the generalized-residual control function (probit/fprobit/"
+            di as text "           poisson first stage) is consistent under Wooldridge's sufficiency"
+            di as text "           assumption D(eps|z,d) = D(eps|GR) and only approximate under joint"
+            di as text "           normality of the structural errors (Wooldridge 2014, 2015; [R]"
+            di as text "           cfprobit).  For a 0/1 treatment firststage(biprobit) is exact;"
+            di as text "           see help apexog, Methods, for the large-N bias table."
+        }
+    }
 end
 
 *==============================================================================
@@ -2953,12 +3409,17 @@ void _apexogfit_apese_mt(string scalar yvar,
     // and the sample covariance of the control functions:
     //   sigma_tilde = (1 + b_cf' Var(chat) b_cf)^(-1/2)
     // which reduces to (1 + theta_cf^2)^(-1/2) for one CF with unit-variance
-    // first-stage residual.  Exact for linear first stages (chat estimates
-    // the structural first-stage error); for generalized-residual first
-    // stages the same formula is applied to the generalized residual
-    // (first-order).  cfinteract CF-product loadings are ignored
-    // (first-order in the CF coefficients).  Used by gunits(structural)
-    // and reported as an elicitation aid.
+    // first-stage residual.  Derived for, and exact with, LINEAR first
+    // stages (chat estimates the structural first-stage error).  For the
+    // generalized-residual first stages the same formula is evaluated on
+    // the generalized residual, but it is NOT the index-scale conversion
+    // there: the Table 1 rebuild (paper/sims/table1, Session 39) puts the
+    // correct offset at the unscaled structural gamma, so v0.19.1 warns
+    // when gunits(structural) is combined with such a first stage (the
+    // value is still reported in e(stilde), as a baseline-fit quantity).
+    // cfinteract CF-product loadings are ignored (first-order in the CF
+    // coefficients).  Used by gunits(structural) and reported as an
+    // elicitation aid.
     real colvector b_cf_col
     b_cf_col = b_pr[|chat_start_idx \ chat_start_idx + n_endog - 1|]'
     st_numscalar("_apexogSTILDE",
@@ -3424,6 +3885,104 @@ void _apexogfit_apese_mt(string scalar yvar,
     st_matrixrowstripe(mname_se,  (J(n_endog, 1, ""), endogs'))
     st_matrixrowstripe(mname_lo,  (J(n_endog, 1, ""), endogs'))
     st_matrixrowstripe(mname_hi,  (J(n_endog, 1, ""), endogs'))
+}
+
+// ----------------------------------------------------------------------------
+// _apexogfit_bp_ape (v0.19): APE + delta-method SE for the recursive bivariate
+// probit engine (firststage(biprobit)).  The caller has just fit
+//     biprobit (y = X d, offset(off)) (d = Z X)
+// and stored e(b)/e(V) in _apexogPR_B/_apexogPR_V.  e(b) is ordered
+//     [eq1: X_1..X_p, d, _cons | eq2: Z.., X.., _cons | athrho],
+// and the first-equation block is located from the column stripe (so a depvar
+// or endog with any name works).  With the gamma-offset baked into the outcome
+// equation the target is the average-structural-function discrete change
+//     APE = mean( Phi(eta_1) - Phi(eta_0) ),
+//     eta = X b_X + d b_d + b_0 + off,  eta_1 = eta + b_d (1-d),  eta_0 = eta - b_d d.
+// The outcome-equation error is standard normal, so Phi(.) IS the ASF: nothing
+// is averaged out, and there is no control function.  Jacobian wrt the FULL
+// parameter vector (zero for the treatment equation and athrho):
+//     d/d b_X_v = mean((phi_1 - phi_0) X_v),   d/d b_d = mean(phi_1),
+//     d/d b_0   = mean(phi_1 - phi_0).
+// SE = sqrt(J V J') with V = biprobit's e(V): a plain MLE delta method, since
+// d is modelled jointly (no generated regressor, no Murphy-Topel step).
+// Also writes _apexogMPHI = mean(phi(eta)) (the gunits(pr) conversion) and
+// _apexogSTILDE = 1: the outcome-equation error has unit variance, so the
+// structural-latent and index scales coincide for this engine.
+// ----------------------------------------------------------------------------
+void _apexogfit_bp_ape(string scalar dname,     string scalar offvarname,
+                       string scalar exognames,
+                       string scalar mname_ape, string scalar mname_se,
+                       string scalar mname_lo,  string scalar mname_hi,
+                       real scalar   level)
+{
+    string rowvector evars
+    string matrix    cstripe
+    real matrix      X_exog, x1, V
+    real colvector   d, off, eta, eta_1, eta_0, Phi_1, Phi_0, phi_1, phi_0, diff_phi
+    real rowvector   b, b1, Jb
+    real scalar      n_obs, n1, K, nxc, j, ape, se_sq, se, z_crit, d_idx, cons_idx
+    string scalar    touse, eq1
+
+    touse = st_local("touse")
+    evars = (exognames == "") ? J(1, 0, "") : tokens(exognames)
+    st_view(d,   ., dname,      touse)
+    st_view(off, ., offvarname, touse)
+    n_obs = rows(d)
+    if (cols(evars) > 0) {
+        st_view(X_exog, ., evars, touse)
+        x1 = (X_exog, d, J(n_obs, 1, 1))
+    }
+    else x1 = (d, J(n_obs, 1, 1))
+    nxc = cols(x1)
+
+    b = st_matrix("_apexogPR_B")
+    V = st_matrix("_apexogPR_V")
+    K = cols(b)
+    cstripe = st_matrixcolstripe("_apexogPR_B")
+    eq1 = cstripe[1, 1]
+    n1  = sum(cstripe[., 1] :== eq1)
+    if (n1 != nxc) {
+        _error("_apexogfit_bp_ape: biprobit outcome equation has " + strofreal(n1) +
+               " columns; expected " + strofreal(nxc) + " ([exog d _cons]).")
+    }
+    b1       = b[|1 \ n1|]
+    d_idx    = nxc - 1
+    cons_idx = nxc
+
+    eta = x1 * b1' + off
+    st_numscalar("_apexogMPHI",   mean(normalden(eta)))
+    st_numscalar("_apexogSTILDE", 1)
+
+    eta_1    = eta + b1[d_idx] :* (1 :- d)
+    eta_0    = eta - b1[d_idx] :* d
+    Phi_1    = normal(eta_1)
+    Phi_0    = normal(eta_0)
+    phi_1    = normalden(eta_1)
+    phi_0    = normalden(eta_0)
+    diff_phi = phi_1 - phi_0
+    ape      = mean(Phi_1 - Phi_0)
+
+    Jb = J(1, K, 0)
+    for (j = 1; j <= nxc - 2; j++) Jb[j] = mean(diff_phi :* X_exog[., j])
+    Jb[d_idx]    = mean(phi_1)
+    Jb[cons_idx] = mean(diff_phi)
+    se_sq = (Jb * V * Jb')[1, 1]
+    if (se_sq < 0) {
+        printf("{err}_apexogfit_bp_ape: J*V*J' = %g < 0.\n", se_sq)
+        se = .
+    }
+    else se = sqrt(se_sq)
+    z_crit = invnormal(1 - (1 - level)/2)
+
+    st_matrix(mname_ape, (ape))
+    st_matrix(mname_se,  (se))
+    st_matrix(mname_lo,  (ape - z_crit*se))
+    st_matrix(mname_hi,  (ape + z_crit*se))
+    st_matrixrowstripe(mname_ape, ("", dname))
+    st_matrixrowstripe(mname_se,  ("", dname))
+    st_matrixrowstripe(mname_lo,  ("", dname))
+    st_matrixrowstripe(mname_hi,  ("", dname))
+    st_matrix("_apexogVTGT", J(1, 1, se^2))
 }
 
 end
