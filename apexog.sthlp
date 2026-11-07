@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.20.0  2026-11-07}{...}
+{* *! version 0.20.1  2026-11-07}{...}
 {vieweralsosee "[R] cfprobit" "help cfprobit"}{...}
 {vieweralsosee "[R] cfregress" "help cfregress"}{...}
 {vieweralsosee "[R] biprobit" "help biprobit"}{...}

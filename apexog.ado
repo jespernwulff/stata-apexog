@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.20.0  2026-11-07
+*! Version 0.20.1  2026-11-07
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -7,6 +7,21 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
+*!
+*! v0.20.1 changelog (vs v0.20.0) -- one SE fix (found while porting to R).
+*!   With cfinteract and an APE target (two or more endogenous regressors,
+*!   control-function products in the main probit) the delta-method
+*!   Jacobian of each APE left the entries of the CF-product coefficients at
+*!   zero, so their sampling variance (and covariances) never reached the
+*!   APE SE.  Both APE branches (slope and discrete change) now fill them:
+*!   slope: b_d * mean(-eta*phi*cfprod), discrete: mean((phi_1-phi_0)*cfprod).
+*!   Point estimates, the AIE target (whose Jacobian already looped over all
+*!   columns) and every fit without cfinteract products are unchanged.
+*!   Validation: run_all quick 60/60 rc 0 (06 APE diff -1.14e-11 / SE diff
+*!   -1.56e-09, 48 anchors 0.8368027 / 0.8610515); _sanity/58 fixtures: 27 of
+*!   28 v0.20.0 specs byte-identical, the cfinteract APE spec B6 moves its SE
+*!   by -0.02% / +0.008% and equals the R port; the R suite checks the new
+*!   entries against a numerical gradient of the APE (slope and discrete).
 *!
 *! v0.20.0 changelog (vs v0.19.1) -- exact probability-scale OUTPUT.
 *!   gunits(pr) still converts user gamma values to the offset at FIRST order
@@ -3822,6 +3837,7 @@ void _apexogfit_apese_mt(string scalar yvar,
             //   d/d(b_d_t)          = mean(phi_1)                 (asymmetric)
             //   d/d(b_d_k, k!=t)    = mean(diff_phi * d_k)
             //   d/d(b_chat_k, all k)= mean(diff_phi * chat0_k)
+            //   d/d(b_cfprod_c)     = mean(diff_phi * cfprod_c)   (v0.20.1)
             for (j = 1; j <= n_exog; j++) {
                 J_beta[j] = mean(diff_phi :* X_exog[., j])
             }
@@ -3831,6 +3847,10 @@ void _apexogfit_apese_mt(string scalar yvar,
             }
             for (k = 1; k <= n_endog; k++) {
                 J_beta[chat_start_idx + k - 1] = mean(diff_phi :* CHAT[., k])
+            }
+            // v0.20.1: cfinteract product coefficients (left at 0 before)
+            for (cc = 1; cc <= n_cf; cc++) {
+                J_beta[cf_start_idx + cc - 1] = mean(diff_phi :* CFPROD[., cc])
             }
             J_beta[cons_idx] = mean(diff_phi)
         }
@@ -3851,6 +3871,10 @@ void _apexogfit_apese_mt(string scalar yvar,
             }
             for (k = 1; k <= n_endog; k++) {
                 J_beta[chat_start_idx + k - 1] = b_d_t * mean(mean_term :* CHAT[., k])
+            }
+            // v0.20.1: cfinteract product coefficients (left at 0 before)
+            for (cc = 1; cc <= n_cf; cc++) {
+                J_beta[cf_start_idx + cc - 1] = b_d_t * mean(mean_term :* CFPROD[., cc])
             }
             J_beta[cons_idx] = b_d_t * mean(mean_term)
         }

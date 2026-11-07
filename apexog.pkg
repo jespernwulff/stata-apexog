@@ -16,6 +16,12 @@ d   Inference uses a Murphy-Topel two-step sandwich computed in
 d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
 d   margins, dydx() to machine precision.
 d
+d   Features (v0.20.1):
+d     - SE fix: with cfinteract and an APE target, the delta-method
+d       Jacobian now includes the control-function-product coefficients
+d       (previously left at zero).  Point estimates, AIE targets and every
+d       fit without cfinteract are unchanged.
+d
 d   Features (v0.20.0):
 d     - exact probability-scale output: at every refit apexog reports the
 d       exact Pr-scale value of each instrument's violation (average
