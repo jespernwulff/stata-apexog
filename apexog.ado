@@ -7,522 +7,59 @@
 *! back-compat aie() shorthand, the Average Interaction Effect (AIE) in the
 *! style of ginteff (Radean 2023) -- in a control-function probit model,
 *! using the Conley/Hansen/Rossi (2012) UCI and LTZ frameworks.
-*!
-*! v0.20.1 changelog (vs v0.20.0) -- one SE fix (found while porting to R).
-*!   With cfinteract and an APE target (two or more endogenous regressors,
-*!   control-function products in the main probit) the delta-method
-*!   Jacobian of each APE left the entries of the CF-product coefficients at
-*!   zero, so their sampling variance (and covariances) never reached the
-*!   APE SE.  Both APE branches (slope and discrete change) now fill them:
-*!   slope: b_d * mean(-eta*phi*cfprod), discrete: mean((phi_1-phi_0)*cfprod).
-*!   Point estimates, the AIE target (whose Jacobian already looped over all
-*!   columns) and every fit without cfinteract products are unchanged.
-*!   Validation: run_all quick 60/60 rc 0 (06 APE diff -1.14e-11 / SE diff
-*!   -1.56e-09, 48 anchors 0.8368027 / 0.8610515); _sanity/58 fixtures: 27 of
-*!   28 v0.20.0 specs byte-identical, the cfinteract APE spec B6 moves its SE
-*!   by -0.02% / +0.008% and equals the R port; the R suite checks the new
-*!   entries against a numerical gradient of the APE (slope and discrete).
-*!
-*! v0.20.0 changelog (vs v0.19.1) -- exact probability-scale OUTPUT.
-*!   gunits(pr) still converts user gamma values to the offset at FIRST order
-*!   (divide by m_phi = mean normal density at the gamma = 0 fit).  New: at
-*!   every refit apexog also reports the EXACT probability-scale value of each
-*!   instrument's violation (new helper _apexoggpr, called by _apexogfit with
-*!   the new gammas()/ivbin() options after a successful fit): for a 0/1
-*!   instrument the average change in Pr(y=1) when it switches 0 -> 1, for any
-*!   other instrument the average derivative mean[phi(eta)] * gamma, both from
-*!   the refitted model over the estimation sample, holding the treatment, the
-*!   control functions and the other instruments' offsets at their observed
-*!   values (companion paper, Section 6).
-*!   - UCI: e(grid_pr) (rows of e(grid) x instruments); the display prints the
-*!     exact range beside each gamma range; with gunits(pr) the graph's x-axis
-*!     is the exact Pr scale.
-*!   - LTZ: e(gamma_sim) (the latent draws) and e(gamma_pr_sim) (their exact
-*!     values); the display prints the draws' exact mean and sd.
-*!   - With a linear first stage, as many instruments as endogenous regressors
-*!     and a continuous instrument, the exact value equals m_phi * gamma
-*!     identically (the offset lies in the span of the regressors and control
-*!     functions, so the refit leaves the fitted index unchanged).
-*!   NO numeric path touched: e(b), e(V), e(grid), bounds, ape_sim/se_sim/
-*!   ape_sim_cnv and the seeded draws are as in v0.19.1 (no random numbers are
-*!   used by the new code).  Validated by _sanity/57_exact_pr_scale.do and the
-*!   57b cross-version dump.
-*!
-*! v0.19.1 changelog (vs v0.19.0) -- documentation + one header warning line.
-*!   NO numeric path touched: every first stage, probit fit, Jacobian, sandwich,
-*!   draw and stored result is byte-identical to v0.19.0 (diff vs
-*!   ./legacy/v0.19.0/apexog.ado = comments, one display flag, two di lines).
-*!   Background (Session 39-table1: paper/sims/table1/RESULTS.txt and
-*!   TEXT_CHANGES.md item 15; paper Sections 4.3/4.4, Appendix B and D.3):
-*!   the sigma_tilde = (1 + b_cf' Var(chat) b_cf)^(-1/2) conversion behind
-*!   gunits(structural) is the index-scale factor for a LINEAR first stage
-*!   only.  For the generalized-residual first stages (probit/fprobit/
-*!   poisson) the structural gamma enters the probit index essentially
-*!   UNSCALED: refitting at the raw structural gamma gives Wald coverage of
-*!   the true APE 0.936 vs 0.589 for the refit at gamma/sqrt(1 - rho^2)
-*!   (binary d, probit first stage, gamma_true = 0.2) and 0.950 vs 0.881
-*!   (fractional d, fprobit first stage), and the interpolated zero-bias
-*!   offset lies within 5% of the structural gamma (0.195/0.518 binary,
-*!   0.200/0.524 fractional, 0.206/0.516 Poisson at gamma_true = 0.2/0.5);
-*!   e(stilde) (0.92/0.92/0.98 at gamma_true = 0) is not that factor there.
-*!   e(stilde) is also a baseline-fit (gamma = 0) quantity that moves with
-*!   the true violation (linear 0.80/0.91/1.00, Poisson 0.98/0.93/0.61 at
-*!   gamma_true = 0/0.2/0.5).  The v0.17.0 wording "first-order approximation
-*!   for generalized-residual first stages" is superseded.
-*!   - WARNING LINE: when gunits(structural) is combined with a probit,
-*!     fprobit, or poisson first stage (any endogenous regressor), both
-*!     results headers print one warning line right after the
-*!     gunits(structural) note, in text style like every other header line
-*!     (so noheader AND quietly suppress it; an error-style line would print
-*!     under quietly and under bootstrap:).  Not an error: behaviour and all stored results
-*!     are unchanged.  No warning with the linear first stage or with
-*!     firststage(biprobit) (sigma_tilde = 1 there).
-*!   - DOCS: apexog.sthlp (gunits() option incl. a new "Linear first stage
-*!     only" paragraph, Input requirements bullet, Stored results e(stilde),
-*!     Methods "Gamma scale" scope paragraph, cross-reference from the
-*!     generalized-residual note) and the in-code comments at step (6b) and
-*!     in the Mata sigma_tilde block; apexog.pkg v0.19.1 block.
-*!   - Validation (2026-10-16, StataNow 19.5): sanity 56 (new) ALL CHECKS
-*!     PASSED -- the warning line appears exactly once for probit/fprobit/
-*!     poisson and the mixed list "probit linear" in both headers, never for
-*!     linear/biprobit/gunits(latent|pr)/noheader/quietly, and e(b)/e(V)/e(grid)/
-*!     bounds/e(stilde)/e(mphi)/draw matrices are identical with and without
-*!     the header; a two-process dump comparison against ./legacy/v0.19.0/
-*!     (56b_cmp_v0190_dump.do: probit, probit+linear and poisson UCI, fprobit
-*!     LTZ, all with gunits(structural)) is byte-identical in %21x; run_all.do
-*!     quick 59/59 PASS, 0 failed (06 APE diff -1.14e-11 / SE diff -1.56e-09,
-*!     48 anchors 0.8368027 / 0.8610515, 42/43/49/50/55 pass).
-*!
-*! v0.19.0 changelog (vs v0.18.0) -- disclosure + recursive bivariate probit engine.
-*!   Background (Session 38 scrutiny review, paper/SCRUTINY_REVIEW_2026-10-15.md
-*!   sections 1.5/3/6.1; evidence paper/sims/scrutiny_2026-10-15/
-*!   binary_d_largeN.do/.log): with firststage(probit) -- and by the same
-*!   logic fprobit/poisson -- the generalized-residual control function is
-*!   Wooldridge's (2014, 2015) APPROXIMATION.  It is consistent for the APE
-*!   under his sufficiency assumption D(eps | z, d) = D(eps | GR), which does
-*!   NOT hold under joint normality of the structural errors (there
-*!   Var(eps | d, z) is heteroskedastic and eps | d, z is not normal); the
-*!   exact estimator for a 0/1 treatment under joint normality is the
-*!   recursive bivariate probit.  Large-N evidence (N = 400,000, sanity-11
-*!   design, gamma = 0, true discrete-change APE 0.21065): two-step GR-CF APE
-*!   (= apexog = cfprobit to all digits) biased -2.7% / -11.6% / -50.6% at
-*!   rho = 0.3 / 0.5 / 0.8; the biprobit ASF APE is within 0.4%.  apexog
-*!   reproduces cfprobit exactly, so this was an inherited, undisclosed
-*!   estimator property, not a computation bug.
-*!   - DISCLOSURE: the results header prints a note whenever a probit/fprobit/
-*!     poisson first stage is in use (both methods); the help file (Methods,
-*!     Input requirements) states the assumption, the bias table, and the
-*!     exact alternative; the showcase example-8 commentary is corrected (its
-*!     Session-31 "conditional-on-CF object" explanation of the 0.1996-vs-
-*!     0.2122 gap was wrong -- the gap is approximation bias).
-*!   - NEW firststage(biprobit): one 0/1 endogenous regressor, linear
-*!     first-stage index.  At each gamma
-*!     apexog fits  biprobit (y = exog d, offset(sum_k gamma_k z_k)) (d = iv exog)
-*!     and takes the APE as the ASF discrete change mean(Phi(eta|d=1) -
-*!     Phi(eta|d=0)) from the outcome equation, with its delta-method SE from
-*!     biprobit's e(V) (vce(robust) or vce(cluster), as requested).  No
-*!     generated regressor, hence no Murphy-Topel step.  Routed through the
-*!     unchanged UCI/LTZ loops: gmin/gmax, mu/omega, distribution(),
-*!     gunits(pr), the delta sweep and all graphs work as before.
-*!     gunits(structural) is accepted and identical to the default: the
-*!     outcome-equation error already has unit variance, so sigma_tilde = 1
-*!     (e(stilde) = 1, stated in the header).  Fits after the baseline are
-*!     warm-started from the baseline e(b) (from(_apexogBP_B0, copy)); the
-*!     baseline itself is a cold fit.  Not available with several endogenous
-*!     regressors or an AIE target (rc 198); estimator(biprobit) points to
-*!     firststage(biprobit).  e(estimator) = "biprobit", e(vce) = "MLE",
-*!     e(rho) = baseline rho_hat.  _apexogfit gained engine(); chat0list()/
-*!     aweightlist() became optional (unused by this engine).
-*!   - Validation (sanity 55_biprobit_engine.do, ALL CHECKS PASSED
-*!     2026-10-15 on StataNow 19.5): at gamma = 0 the APE and SE equal
-*!     margins, dydx(d) predict(pmarg1) after biprobit with i.d to machine
-*!     precision (APE diff 2.8e-17, SE reldif 1.5e-16); N = 400,000, rho =
-*!     0.8, same seed as the scrutiny run: biprobit engine 0.21083 (+0.09% vs
-*!     the true 0.21065) while the probit-first-stage engine gives 0.10411
-*!     (-50.6%), both equal to the scrutiny log; a degenerate-prior LTZ
-*!     collapses on the UCI value at the same gamma (<1e-6) with the convolved
-*!     CI reproducing the Wald CI; warm == cold to 1e-5; gunits(structural) ==
-*!     default to 1e-12 and gunits(pr) == latent/m_phi to 1e-8; coverage MC
-*!     (R = 300, n = 2000, gamma_true = 0.1): the Wald interval at the true
-*!     gamma covers 0.963 (MC se 0.013), the gamma = 0 baseline 0.077.  The
-*!     control-function paths are untouched (run_all.do quick re-run the
-*!     same day; see the Session-39 log in CLAUDE.md).
-*!
-*! v0.18.0 changelog (vs v0.17.0) -- input validation, robustness, housekeeping.
-*!   STATUS: VALIDATED 2026-09-09 on StataNow 19.5 SE.  Written 2026-09-04 as a
-*!   candidate while no licensed Stata was available, then run through the full
-*!   quick sanity suite (57 files; the 05/06/38/40/42/43/45/46/48 anchors
-*!   byte-identical, e.g. sanity 06 APE diff -1.14e-11 vs cfprobit + margins),
-*!   examples.do, apexog_showcase.do (every recorded anchor reproduced to the
-*!   last printed digit), the new tests 49-51, and the new coverage Monte Carlos
-*!   52-54 (cluster-robust 0.943; uniform prior 0.960; two-endog 0.955/0.945).
-*!   No numeric path (first stages, probit-with-offset, Mata Murphy-Topel
-*!   sandwich, APE/AIE Jacobians, LTZ convolution) was touched; every change
-*!   below is parsing, validation, display, or ereturn.
-*!   NOTE for white-box callers that drive _apexogfit standalone (sanity 37):
-*!   apexog now drops every _apexog* matrix and scalar at exit, so hand-set
-*!   _apexogIVMASK/_apexogEXOGMASK must be re-created after any apexog call.
-*!   Bug fixes:
-*!   - debug: _apexogfit crashed with r(111) at the end of every fit because
-*!     its last debug line read _apexogAPE_vec AFTER `return matrix' had moved
-*!     it into r().  (Sanity 05 was failing for exactly this reason.)
-*!   - uci + graph in AIE mode plotted nonexistent variables (the svmat columns
-*!     are aie_*, the twoway call asked for ape_*) -> r(111).
-*!   - e(cmdline) recorded only the positional part of the command; it now
-*!     holds the full command line including if/in and options.
-*!   - Long variable names: e(lb_<endog>)/e(ub_<endog>) and the matrix column
-*!     names ape_<endog> / aie_<X>_<Z> exceeded Stata's 32-character name limit
-*!     for long names and errored at the very END of the run.  Labels are now
-*!     truncated to fit (27 chars per endog, 13 per AIE interactor; a collision
-*!     falls back to endog<j>).  Short names are unaffected: e(lb_d), ape_d,
-*!     ... are exactly as before.
-*!   - Stale note "APE and SE are reported for the FIRST endog" (true only up
-*!     to v0.7) replaced.
-*!   New validation (each an explicit rc 198 message instead of a cryptic
-*!   downstream failure or -- worse -- a silently wrong answer):
-*!   - depvar must be coded 0/1 on the estimation sample.  Stata's probit
-*!     silently treats any nonzero value as 1, but apexog's Mata score used the
-*!     raw value, so a 0/2-coded outcome gave wrong Murphy-Topel SEs.
-*!   - depvar, controls, endogenous regressors, and instruments must be
-*!     disjoint (an endog among the controls; a regressor as its own IV).
-*!   - gmin() may not exceed gmax() for any instrument.
-*!   - firststage(probit) requires a 0/1 endog; fprobit one in [0,1]; poisson a
-*!     nonnegative one (probit on a continuous d used to die with r(2000)).
-*!   - a first stage that silently drops observations (perfect prediction in a
-*!     probit first stage) or yields an undefined control function (extreme
-*!     first-stage fitted values) now stops with a message; previously the
-*!     Mata views and the first-stage fit could be misaligned.
-*!   - the two AIE interactors must be distinct; `##' inside an endogenous
-*!     clause is rejected (write the interaction with a single # and list the
-*!     main effects separately).
-*!   Usability:
-*!   - level() also accepts Stata's percent form: level(95) == level(.95)
-*!     (e(level) stays a fraction, as before).
-*!   - vce() accepts the usual abbreviations (vce(r), vce(cl id)) and a STRING
-*!     cluster variable (grouped into a numeric id internally -- the Mata
-*!     views need a numeric id; a string id previously failed inside Mata).
-*!   - variable names are unabbreviated (fvunab/unab) before use, so
-*!     abbreviations work everywhere and misspelt names error up front.
-*!   - the estimation sample (if/in + missing values, incl. the cluster id) is
-*!     fixed ONCE, before the full-rank instrument cleaning, so the cleaning
-*!     and every fit see the same observations (the cleaning ignored if/in).
-*!   - notes when method-specific options are ignored (gmin/gmax with ltz;
-*!     mu/omega/distribution/seed with uci; cfinteract with one endog).
-*!   - replay accepts level(): `apexog, level(90)'.
-*!   ereturn additions: e(N_clust) and e(clustvar) with vce(cluster).
-*!   Housekeeping: the internal _apexog* matrices and scalars are dropped at
-*!   exit (all results live in e()); nothing the user owns is touched.
-*!
-*! v0.17.0 changelog (vs v0.16.1) -- structural-latent gamma units:
-*!   - New gunits(structural) value.  apexog's gamma lives in the PROBIT-INDEX
-*!     latent scale (unit CONDITIONAL error sd, given the control functions),
-*!     whereas a researcher reasoning about the structural latent equation
-*!     y* = xb + gamma*z + eps with TOTAL error variance 1 elicits gamma on a
-*!     scale that differs by exactly sigma_tilde = sd(eps | CF) =
-*!     (1 + b_cf' Var(chat) b_cf)^(-1/2), estimated from the baseline-fit
-*!     control-function coefficient(s) (for one CF with unit-variance
-*!     first-stage residual: (1 + theta_cf^2)^(-1/2)).  Feeding a
-*!     structural-units prior to the offset unrescaled is a scale
-*!     miscalibration c = sigma_tilde with closed-form wide-prior LTZ
-*!     coverage 2*Phi(z*c)-1 (~0.88 at rho = 0.6 instead of 0.95; Session 34).
-*!     With gunits(structural), all user gamma quantities (gmin/gmax,
-*!     mu/omega, distribution() draws, sweep values) are divided by the
-*!     estimated sigma_tilde (variances by sigma_tilde^2) after the baseline
-*!     fit, exactly mirroring the gunits(pr) machinery.  Exact for linear
-*!     first stages; for generalized-residual first stages (probit/fprobit/
-*!     poisson) sigma_tilde applies the same formula to the generalized
-*!     residual and is first-order.  cfinteract CF-product terms are ignored
-*!     in sigma_tilde (first-order in the CF coefficients).
-*!   - Both methods now always print the estimated sigma_tilde on a second
-*!     Scale: header line (next to the m_phi elicitation aid) so users can
-*!     diagnose the index-vs-structural units gap, and return e(stilde).
-*!     _apexogfit returns r(stilde).
-*!   - Default gunits(latent) remains byte-identical to v0.16.1.
-*!
-*! v0.16.1 changelog (vs v0.16.0) -- UCI grid guard:
-*!   - method uci now errors early (rc 908) with an actionable message when
-*!     the grid^(#instruments) point count exceeds c(max_matsize), instead
-*!     of dying in the J() allocation with a cryptic matsize error.  The
-*!     message points to lowering grid(), using fewer instruments, or
-*!     switching to method ltz (which uses draws, not a grid).  No change to
-*!     any in-range path.
-*!
-*! v0.16.0 changelog (vs v0.15.0) -- proper e() posting, guards, delta sweep:
-*!   - e(b)/e(V)/e(sample) now POSTED: e(b) holds the baseline (gamma=0)
-*!     target estimates (APE per endog, or the AIE) and e(V) their full
-*!     Murphy-Topel delta-method covariance (cross-target terms from the
-*!     shared V_beta) with esample() set -- so `if e(sample)', test, lincom,
-*!     estimates store, and replay all work.  Replay (`apexog' after
-*!     estimation) redisplays the coefficient table.  This also removes the
-*!     old r(301) quirk with subsequent estimation commands.
-*!   - New guards: (i) the estimation sample now marks out missing values of
-*!     ALL endogenous regressors (previously only the first) and of the
-*!     cluster variable; (ii) _apexogfit returns missings with a warning if
-*!     the probit silently dropped observations (perfect prediction) or if
-*!     an endog/control-function column was omitted as collinear (the MT
-*!     math is undefined in either case).
-*!   - New LTZ delta-sweep: graphomega(numlist) [graphmu() graphdelta()]
-*!     reruns the simulation for a sequence of prior widths (single value
-*!     per sweep step, broadcast to all instruments; Gaussian priors only)
-*!     and reports/plots the CHR-figure "bounds vs delta": e(sweep) matrix
-*!     (delta mu lb ub lb_prior ub_prior); with graph, the sweep plot
-*!     replaces the LTZ histogram.  gunits(pr) applies to sweep values too.
-*!   - Packaging claim corrected: StataNow is NOT required at runtime
-*!     (apexog never calls cfprobit; the cfprobit comparisons live only in
-*!     the validation suite).  Requires Stata 18.
-*!
-*! v0.15.0 changelog (vs v0.14.0) -- probability-point gamma units:
-*!   - New gunits(latent|pr) option.  apexog's gamma lives in the LATENT INDEX
-*!     (the offset shifts y* in probit-sd units), whereas plausexog applied to
-*!     a binary outcome is an LPM whose gamma is the instrument's direct
-*!     effect on Pr(y=1).  With gunits(pr), all user-supplied gamma values
-*!     (gmin/gmax, mu/omega, distribution() draws) are interpreted as
-*!     PROBABILITY POINTS and converted to latent units by dividing by
-*!     m_phi = mean(normalden(eta_hat)) from the baseline (gamma=0) fit --
-*!     the average dPr/dindex slope, i.e. the same factor that maps the
-*!     latent coefficient into the APE.  (omega, a variance, is divided by
-*!     m_phi^2; for non-Gaussian distribution() priors the DRAW is rescaled,
-*!     which is equivalent and works for chi2/t/gamma/poisson/special whose
-*!     parameters are not scale parameters.)  The conversion is first-order
-*!     (exact as gamma -> 0); all gamma values displayed and stored
-*!     (e(grid), graphs) are LATENT units, with a header note when
-*!     gunits(pr) is active.  Default gunits(latent) is byte-identical to
-*!     v0.14.0.
-*!   - Both methods now always print the elicitation aid line
-*!     "1 latent-index unit of gamma = m_phi pr. points per unit of Z" and
-*!     return e(mphi) and e(gunits).  _apexogfit returns r(mphi).
-*!
-*! v0.14.0 changelog (vs v0.13.2) -- LTZ interval now convolves sampling noise:
-*!   - Pre-0.14, the LTZ percentile interval was taken over the per-draw POINT
-*!     APEs only: a sensitivity distribution (prior-induced spread of the
-*!     bias-adjusted point estimates), NOT the CHR (2012) eq. (7) confidence
-*!     interval, which convolves sampling noise with the gamma prior
-*!     (betahat ~ N(beta, V) + A*gamma, terms independent; plausexog implements
-*!     this as V + A*Omega*A' analytically and as per-draw N(0,V)+A*gamma in
-*!     its simulated path).  Symptom: a tight prior produced an LTZ interval
-*!     NARROWER than the baseline gamma=0 CI -- impossible for a genuine LTZ
-*!     CI -- and LTZ was internally inconsistent with UCI (whose grid points
-*!     already contribute APE +/- z*SE_MT).  Demonstrated and validated in
-*!     _sanity/37_ltz_convolution.do: the convolved recipe reproduces
-*!     plausexog's analytic V + A*Omega*A' interval in the linear oracle
-*!     (width ratio 0.995); the raw recipe gives 1/sqrt(2) of it when prior
-*!     spread ~ sampling SE.
-*!   - Fix: the LTZ loop now ALSO stores the per-draw Murphy-Topel SE
-*!     (r(se_vec), previously discarded), and _apexogsim_pct convolves
-*!     APE*_i = APE_i + SE_i*eps_i, eps_i ~ N(0,1), AFTER the loop (so the
-*!     gamma-draw sequence under seed() is byte-identical to v0.13.2).  The
-*!     headline e(lb_*)/e(ub_*) percentile interval is now taken over the
-*!     CONVOLVED draws; the prior-only spread of point APEs is still shown as
-*!     a labeled sensitivity band and returned in e(lo_prior_vec)/
-*!     e(hi_prior_vec).  New ereturns: e(se_sim) (per-draw MT SEs),
-*!     e(ape_sim_cnv) (convolved draws), e(lo_prior_vec), e(hi_prior_vec).
-*!     The LTZ histogram now plots the convolved draws.  Applies identically
-*!     to Gaussian and distribution() priors, APE and AIE targets, and all
-*!     first-stage types.  UCI is untouched.
-*!
-*! v0.13.2 changelog (vs v0.13.1) -- cosmetic, no numeric change:
-*!   - The instrument-cleaning step (v0.13.1) ran _rmcoll noisily, spilling
-*!     cryptic "note: __000002 omitted because of collinearity" lines (tempvar
-*!     names) into the output -- alarming and uninformative.  _rmcoll is now
-*!     quiet; instead, when degenerate/collinear instrument terms are dropped,
-*!     a single clear note reports how many were dropped, which full-rank
-*!     instruments are retained (original names), and how many
-*!     gmin/gmax/mu/omega values are needed (or that a single value broadcasts).
-*!
-*! v0.13.1 changelog (vs v0.13.0) -- "full-rank instrument cleaning":
-*!   - FACTOR-VARIABLE INSTRUMENTS now work.  fvexpand of e.g.
-*!     dummy##c.eldisadv leaves base levels (0b.) and bare-vs-factor /
-*!     moderator duplicates that are collinear with the controls; these
-*!     degenerate columns made the Murphy-Topel first-stage W rank-deficient
-*!     (singular M_pi -> non-PSD VCE -> a MISSING AIE/APE SE on factor-heavy
-*!     IV specs).  The instrument list is now cleaned to full rank (data-based,
-*!     via _rmcoll against the controls) and each surviving instrument is
-*!     materialised as a plain tempvar (no later factor re-expansion can
-*!     reintroduce a base level).  On master_rev2 the AIE SE is now finite and
-*!     the point AIE matches ginteff after the manual decomposition to machine
-*!     precision (sanity 34: point diff -1.2e-11, SE 0.0318 vs missing pre-fix).
-*!     No-op for already-clean continuous instruments (sanity 06/24/31/32
-*!     byte-identical).  e(instruments) shows the cleaned term names.
-*!   - A SINGLE gmin/gmax/mu/omega value is now broadcast to all instruments
-*!     (handy since the instrument count is the cleaned, full-rank count).
-*!   - NOTE (correcting the v0.13.0 log): apexog's point AIE was never wrong on
-*!     the real data -- it matches ginteff exactly.  The earlier apparent
-*!     "divergence" used cfprobit's predict, xb as the oracle, which differs
-*!     from the standard latent index.  The only real bug was the missing SE.
-*!
-*! v0.13.0 changelog (vs v0.12.0) -- "properly instrumented endogenous AIE":
-*!   - The interaction of an ENDOGENOUS treatment with a moderator (e.g.
-*!     c.employment_gap#c.eldisadv) can now be declared as a SECOND endogenous
-*!     regressor directly in the varlist, mirroring cfprobit/plausexog:
-*!         apexog uci y X (c.d c.d#c.X = z1 z1#c.X z2 ...), target(c.d#c.X)
-*!     The interaction gets its own first stage + control function (instrumented
-*!     by the user-supplied moderator x instrument interactions), instead of the
-*!     v0.9-v0.12 behaviour of treating d*X as an exogenous control (a mis-
-*!     specification when d is endogenous).
-*!   - New cfinteract option (auto-on for the endogenous-interaction AIE) adds
-*!     the products of the control functions to the main probit, replicating
-*!     cfprobit's cfinteract.  At gamma=0 the AIE now matches the properly
-*!     instrumented 2-endog cfprobit to machine precision (sanity 31/32).
-*!   - Murphy-Topel VCE extended: first-stage uncertainty propagates through the
-*!     control-function product terms too (sanity 33: MT AIE SE within bootstrap
-*!     MC error of the gold standard).  Reduces exactly to the v0.12 VCE when no
-*!     cfinteract products are present (sanity 06/24 byte-identical).
-*!   - Scope: one two-way interaction endog; continuous-by-continuous validated
-*!     to machine precision.  v0.12.0 source preserved in ./legacy/v0.12.0/.
-*!
-*! v0.12.0 changelog (vs v0.11.0):
-*!   - RENAMED: plausexog_ape -> apexog.  Internal helpers _papefit,
-*!     _papefit_apese_mt, _papeerr, and all _pape* matrices/scalars
-*!     consistently renamed to _apexog* (clean prefix; matches the command).
-*!     v0.11.0 source preserved in ./legacy/v0.11.0/ per the project's
-*!     "copy not move" rule.  No behavioral change -- this version is
-*!     functionally identical to v0.11.0.
-*!
-*! v0.11.0 changelog (vs v0.10.0) -- "Phase 2 of the Stata-native-syntax refactor":
-*!   - target() now accepts Stata factor-variable interaction specs to declare
-*!     an AIE target with EXPLICIT type prefixes that drive the formula choice:
-*!         target(c.X#c.Z) -> cts x cts AIE   (cross-partial)
-*!         target(c.X#i.d) -> cts x binary AIE (firstdiff in d)
-*!         target(i.X#i.d) -> binary x binary AIE (2nd discrete difference)
-*!     The prefixes OVERRIDE any value-based auto-detection (so the user can,
-*!     e.g., force a discrete-change formulation for an indicator variable
-*!     that happens to take values in {0,1} even if treated as continuous).
-*!   - target() and aie() are mutually exclusive: target() supersedes aie() for
-*!     anyone using the new fv-style syntax.  aie() is kept as a back-compat
-*!     shorthand: aie(X Z) is internally translated to target(<X>#<Z>) with
-*!     value-based prefix auto-detection (so existing scripts still work).
-*!   - Display + ereturn additions: the "Target:" header shows the fv-style spec
-*!     when AIE is requested via target(); new e(aie_spec) = "c.X#i.d" gives
-*!     the parsed spec.
-*!   - Internals retained from v0.10: the wrapper still creates an aie_XZ
-*!     tempvar = X*Z and routes through the existing Mata AIE branches.  The
-*!     "use a native fv interaction column in the probit" refactor is deferred
-*!     to v0.12 (Phase 2b) -- it's purely an internal/representation change
-*!     and does NOT affect the user-visible output.
-*!
-*! v0.10.0 changelog (vs v0.9.0) -- "Phase 1 of the Stata-native-syntax refactor":
-*!   - New target() option for selecting which endogenous regressor's APE to
-*!     report.  Default (omitted) = APE for every endog (current behavior).
-*!     target(d1)         -> only the APE of d1 is displayed/ereturned
-*!     target(d1 d2)      -> the APEs of d1 and d2
-*!   The interaction-AIE workflow remains via the aie() option in Phase 1;
-*!   target() will be extended to AIE specs (e.g. target(c.X#i.d)) in Phase 2,
-*!   when the varlist gains factor-variable-interaction support.
-*!   - New i./c. prefix support on endogenous-clause variables:
-*!     (c.d = z)  -> treats d as continuous; defaults firststage(linear)
-*!     (i.d = z)  -> treats d as binary;     defaults firststage(probit)
-*!   The prefix only sets the DEFAULT first-stage type; firststage() still
-*!   overrides.  Internally the prefix is stripped, so the main probit fits
-*!   on bare `d' (binary-ness is then auto-detected from the values).
-*!   - One-line "Target:" header in the output makes it explicit which
-*!     functional is being reported.
-*!   - Backup of v0.9.0 lives in ./legacy/v0.9.0/ (copy, not move).
-*!
-*! v0.9.0 changelog (vs v0.8.0):
-*!   - New aie(<X> <Z>) option: switch the sensitivity target from the APE to
-*!     the Average Interaction Effect for the interaction of X and Z.  The
-*!     type of each interactor (continuous vs binary) is auto-detected and
-*!     the appropriate AIE formula is used:
-*!         cts x cts -- cross-partial: AIE = E[phi(eta)*(b_XZ - eta*a*b)]
-*!         cts x bin -- firstdiff in the binary of the cts-derivative
-*!         bin x bin -- 2nd discrete difference of Phi
-*!     Multi-level factor interactors (3+ unique non-{0,1} values) are not
-*!     supported in v0.9.
-*!   - EITHER OR BOTH interactors may be endogenous -- this is the canonical
-*!     cfprobit use case (interaction of an endog treatment with a moderator).
-*!     apexog generates XZ = X*Z as a tempvar and adds it to the exog
-*!     list for the main probit.  When an interactor is endogenous, the
-*!     wrapper automatically EXCLUDES XZ = X*d from that endog's first-stage
-*!     regression (otherwise the first stage would be circular: d on the LHS,
-*!     X*d on the RHS).  A per-endog exog-mask matrix (_apexogEXOGMASK) carries
-*!     this through to Mata so W_k matches what was actually fit.
-*!   - Each AIE case has its own closed-form Jacobian wrt the full beta vector
-*!     (with special corrections at the b_X, b_Z, b_XZ entries).  The Jacobian
-*!     is passed through the same Murphy-Topel V_beta to give the delta-method
-*!     SE, which then incorporates first-stage generated-regressor uncertainty.
-*!   - Verified to machine precision against hand-coded analytic references in
-*!     all four configurations: exog-by-exog cts (sanity 24), endog-by-exog cts
-*!     (sanity 26), cts-by-binary (sanity 27), and binary-by-binary (sanity 28).
-*!   - Display, ereturn, and graphing all branch cleanly on aie_active.  New
-*!     ereturn locals: e(target)="aie", e(aie_vars)="<X> <Z>"; new scalars:
-*!     e(lb_aie), e(ub_aie); baseline_ape_vec is 1x1 (the AIE).
-*!
-*! v0.8.0 changelog (vs v0.7.0):
-*!   - Multi-clause syntax: (d1 = z1 z2) (d2 = z3 z4) so each endog can have
-*!     its own instrument set.  Validated against cfprobit's per-clause syntax
-*!     to machine precision on APEs and 0.1% on SEs.
-*!   - APE bounds reported for EVERY endogenous regressor (not just the first).
-*!     New ereturn matrices: e(baseline_ape_vec), e(baseline_se_vec), etc.
-*!     Per-endog scalars: e(lb_<name>), e(ub_<name>) for each endog.
-*!     UCI grid matrix has per-endog columns (ape_<name>, lo_<name>, hi_<name>).
-*!     LTZ simulation matrix has one column per endog.
-*!   - Mata refactor: per-endog W_k built from a Stata IV-mask matrix
-*!     (J x n_iv) selecting active first-stage IVs.
-*!
-*! v0.7.0 changelog (vs v0.6.0):
-*!   - Non-Gaussian LTZ priors via distribution(): normal, uniform, chi2, t,
-*!     gamma, poisson, special.  Mirrors plausexog.ado's machinery.
-*!   - firststage() now accepts either ONE type (applied to all endogs) OR
-*!     a list (one per endog, in order).  Validated against cfprobit's
-*!     per-clause first-stage syntax (machine-precision agreement).
-*!   - Added SSC package metadata (apexog.pkg, stata.toc).
-*!
-*! v0.6.0 changelog (vs v0.5.0):
-*!   - Multiple endogenous regressors.  Each gets its own first stage; all
-*!     chat0s enter the main probit; MT correction accumulates first-stage
-*!     uncertainty from every endog.  The APE target is the FIRST endog
-*!     (reorder the varlist to change which one gets the SE).
-*!     Validated: 2-endog APE matches cfprobit + margins to 1.5e-11.
-*!
-*! v0.5.0 changelog (vs v0.4.0):
-*!   - vce(cluster <varname>): cluster-robust SEs throughout (first stage,
-*!     main probit, AND the MT meat — sum of cluster-summed scores).
-*!     Validated against Stata's native probit cluster SE.
-*!   - graph option: line plot of UCI APE bounds vs gamma, or histogram
-*!     of LTZ APE draws.  Optional graphoptions() forwarded to twoway.
-*!   - apexog.sthlp written for SSC-ready documentation.
-*!   - Investigated cfprobit's `margins, dydx(d)' for fprobit: confirmed that
-*!     cfprobit uses the binary-d CF formula in its `predict, pr' even when
-*!     d is fractional (see _remake_cfs.ado in Stata's source).  This is a
-*!     cfprobit quirk; our APE uses the proper generalized residual.
-*!
-*! v0.4.0 changelog (vs v0.3.0):
-*!   - Added firststage(fprobit) for fractional endogenous regressors in [0,1].
-*!     The Bernoulli QMLE used by fracreg probit has the same score as probit,
-*!     so chat0 and A_i are computed identically; only the Stata first-stage
-*!     command differs.
-*!   - Added firststage(poisson) for count endogenous regressors.  chat0 =
-*!     d - exp(Wpi) (raw residual on the natural scale); A_i = exp(Wpi) = mu.
-*!     The unified MT formula handles this with zero Mata changes.
-*!
-*! v0.3.0 changelog (vs v0.2.0):
-*!   - Added firststage(probit) for binary endogenous regressors.
-*!   - Auto-detect binary d -> discrete-change APE; else slope APE.
-*!   - Unified MT Mata via per-obs weight A_i (probit: chat*(Wpi+chat); linear: 1).
-*!
-*! v0.2.0 changelog (vs v0.1.0):
-*!   - Replaced fragile in-loop `gmm' call with `probit ... offset(...)' plus
-*!     Murphy-Topel (two-step sandwich) SE computed in Mata.
-*!
-*! Supports:
-*!   - method: uci, ltz
-*!   - target: APE (default) for each endogenous regressor, OR AIE via
-*!     aie(<X> <Z>) for a continuous-by-continuous interaction
-*!   - LTZ priors: Gaussian via mu()/omega(), OR distribution(normal | uniform
-*!     | chi2 | t | gamma | poisson | special) for non-Gaussian priors
-*!   - 1+ endogenous regressors (APE reported for EACH one)
-*!   - Multi-clause syntax: (d1 = z1 z2) (d2 = z3 z4) with per-endog IV sets
-*!   - firststage: one type (linear | probit | fprobit | poisson) applied to
-*!     all endogs, OR a list (one per endog) for per-endog typing
-*!   - vce: robust (default), cluster <varname>
-*!     (for bootstrap: wrap apexog in Stata's `bootstrap' prefix)
-*!   - graph option for UCI grid plot and LTZ histogram (first endog)
-*!
-*! Known limitation:
-*!   - cfprobit-style cfopts inside parens (e.g. `(d1 = z1, probit)`) are NOT
-*!     supported because Stata's `syntax' command treats commas inside
-*!     `anything()' as outer option separators.  Use the firststage(<t1>...)
-*!     option instead for per-endog typing.
+*! Documentation: help apexog, https://jespernwulff.github.io/apexog/
+*
+* Version history (user-visible changes; help apexog has the details)
+*   0.20.1  APE standard errors with cfinteract now include the terms of the
+*           control-function-product coefficients (point estimates, AIE
+*           targets and fits without cfinteract are unchanged).
+*   0.20.0  Exact probability-scale value of each instrument's violation at
+*           every refit: e(grid_pr) for uci; e(gamma_sim) and e(gamma_pr_sim)
+*           for ltz.  The gunits(pr) input conversion stays first order.
+*   0.19.1  Header warning when gunits(structural) is combined with a probit,
+*           fprobit or poisson first stage (the sigma_tilde conversion is
+*           derived for a linear first stage).  No numeric change.
+*   0.19.0  firststage(biprobit): recursive bivariate probit for one 0/1
+*           endogenous regressor; e(rho).  Header note that the probit,
+*           fprobit and poisson first stages use a generalized-residual
+*           control function (Wooldridge 2014, 2015), an approximation under
+*           joint normality.
+*   0.18.0  Input validation (0/1 outcome, disjoint variable lists,
+*           gmin <= gmax, first-stage support and sample checks); level(95),
+*           vce(cl id), string cluster ids, e(N_clust), e(clustvar), full
+*           e(cmdline).  Fixes: the debug option, the uci graph with an AIE
+*           target, long variable names, if/in in the instrument cleaning.
+*   0.17.0  gunits(structural); sigma_tilde in the header and e(stilde).
+*   0.16.1  Early error when the uci grid exceeds c(max_matsize).
+*   0.16.0  Posts e(b), e(V) and e(sample) (test, lincom, estimates store,
+*           replay); graphomega() prior-width sweep, e(sweep); guards for
+*           perfect prediction and collinear control functions.
+*   0.15.0  gunits(pr): gamma in probability points; e(mphi).
+*   0.14.0  The ltz interval convolves sampling noise with the gamma prior
+*           (CHR 2012, eq. 7); the prior-only band is reported alongside.
+*   0.13.x  Endogenous interaction AIE, (c.d c.d#c.X = z c.z#c.X) with
+*           target(c.d#c.X) and cfinteract; factor-variable instruments
+*           reduced to full rank.
+*   0.12.0  Renamed from plausexog_ape to apexog.
+*   0.11.0  target() accepts interaction specs for the AIE: c.X#c.Z,
+*           c.X#i.d, i.X#i.d (the prefixes set the AIE formula).
+*   0.10.0  target(); i./c. prefixes in the endogenous clause set the default
+*           first stage.
+*   0.9.0   aie(X Z): average interaction effect target (continuous or
+*           binary interactors, endogenous or exogenous).
+*   0.8.0   One instrument set per endogenous regressor, (d1 = z1) (d2 = z2);
+*           APE bounds for every endogenous regressor.
+*   0.7.0   distribution() priors for ltz; a firststage() list, one type per
+*           endogenous regressor.
+*   0.6.0   Multiple endogenous regressors.
+*   0.5.0   vce(cluster); graph option; help file.
+*   0.4.0   firststage(fprobit) and firststage(poisson).
+*   0.3.0   firststage(probit); discrete-change APE for a 0/1 treatment.
+*   0.2.0   Murphy-Topel two-step standard errors in Mata.
+*
+* Known limitation: first-stage options inside the parentheses, as in
+* cfprobit's (d1 = z1, probit), are not supported (Stata's syntax command
+* reads the inner comma as an option separator); use firststage() instead.
 
 cap program drop apexog
 cap program drop _apexogfit
@@ -1861,7 +1398,7 @@ program apexog, eclass
     *      as gunits(pr) with a different conversion factor.
     *      v0.19.1: this conversion is derived for a LINEAR first stage.  For
     *      the generalized-residual first stages (probit/fprobit/poisson) the
-    *      Table 1 rebuild (paper/sims/table1, Session 39) puts the correct
+    *      validation Monte Carlos put the correct
     *      offset at the UNSCALED structural gamma, so the headers warn when
     *      gunits(structural) meets one of them (flag _grfs); the arithmetic
     *      below is deliberately unchanged.
@@ -3134,7 +2671,7 @@ mata:
 // and taking percentiles of {APE*_i} reproduces CHR's pivot interval
 // [APE0 - c_{1-a/2}(eta), APE0 - c_{a/2}(eta)] exactly (symmetric noise), and
 // reproduces plausexog's analytic V + A*Omega*A' interval in the linear model
-// (validated in _sanity/37_ltz_convolution.do).
+// (checked by simulation).
 //
 // The eps draws happen HERE, after the gamma loop, so the gamma-draw sequence
 // under seed() is identical to pre-0.14 versions.  A full N_iter x J eps
@@ -3428,7 +2965,7 @@ void _apexogfit_apese_mt(string scalar yvar,
     // stages (chat estimates the structural first-stage error).  For the
     // generalized-residual first stages the same formula is evaluated on
     // the generalized residual, but it is NOT the index-scale conversion
-    // there: the Table 1 rebuild (paper/sims/table1, Session 39) puts the
+    // there: the validation Monte Carlos put the
     // correct offset at the unscaled structural gamma, so v0.19.1 warns
     // when gunits(structural) is combined with such a first stage (the
     // value is still reported in e(stilde), as a baseline-fit quantity).
