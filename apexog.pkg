@@ -12,9 +12,20 @@ d   With aie(X Z), the target switches to the Average Interaction
 d   Effect for the continuous-by-continuous interaction c.X##c.Z,
 d   in the style of ginteff (Radean 2023).
 d
-d   Inference uses a Murphy-Topel two-step sandwich computed in
-d   Mata; at gamma = 0 the resulting APE SE matches cfprobit +
-d   margins, dydx() to machine precision.
+d   Inference uses the full two-step influence function (Murphy-Topel
+d   sandwich for the probit coefficients plus the effect's direct
+d   first-stage term) computed in Mata; at gamma = 0 the point estimate
+d   matches cfprobit + margins, dydx() to machine precision and the SE
+d   differs from it by the direct term only (about 1%).
+d
+d   Features (v0.21.0):
+d     - the standard error of every two-step target (APE and AIE, all
+d       first stages, cfinteract, vce(cluster)) adds the direct dependence
+d       of the effect on the estimated first-stage parameters through the
+d       control function (influence function J_beta' psi_beta + J_pi'
+d       psi_pi).  Point estimates unchanged; SEs move by about 1% in the
+d       validation designs, in either direction.  firststage(biprobit)
+d       unaffected.
 d
 d   Features (v0.20.1):
 d     - SE fix: with cfinteract and an APE target, the delta-method

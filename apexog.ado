@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.20.1  2026-11-07
+*! Version 0.21.0  2026-11-08
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -10,6 +10,13 @@
 *! Documentation: help apexog, https://jespernwulff.github.io/apexog/
 *
 * Version history (user-visible changes; help apexog has the details)
+*   0.21.0  The standard error of every two-step target (APE and AIE, all
+*           first stages, cfinteract, vce(cluster)) now adds the direct
+*           dependence of the effect on the estimated first-stage parameters
+*           through the control function (influence function
+*           J_theta' psi_2 + J_pi' psi_1).  Point estimates unchanged; SEs
+*           move by about 1% in the validation designs, in either direction.
+*           firststage(biprobit) is unaffected.
 *   0.20.1  APE standard errors with cfinteract now include the terms of the
 *           control-function-product coefficients (point estimates, AIE
 *           targets and fits without cfinteract are unchanged).
@@ -2772,6 +2779,26 @@ void _apexogsweep_pct(real scalar level)
 }
 
 // ----------------------------------------------------------------------------
+// _apexogfit_meat (v0.21.0): outer product of per-observation contributions,
+// summed within clusters first when clustered == 1 (sort_idx / info from
+// order() and panelsetup() on the cluster id).
+// ----------------------------------------------------------------------------
+real matrix _apexogfit_meat(real matrix M, real matrix sort_idx,
+                            real matrix info, real scalar clustered)
+{
+    real matrix Ms, Mc
+    real scalar ci, m
+    if (!clustered) return(cross(M, M))
+    m  = cols(M)
+    Ms = M[sort_idx, .]
+    Mc = J(rows(info), m, 0)
+    for (ci = 1; ci <= rows(info); ci++) {
+        Mc[ci, .] = colsum(Ms[|info[ci,1], 1 \ info[ci,2], m|])
+    }
+    return(cross(Mc, Mc))
+}
+
+// ----------------------------------------------------------------------------
 // _apexogfit_apese_mt: Murphy-Topel-corrected V_beta + APE delta-method SE.
 //
 // Unified for linear and probit first stages via a per-obs weight A_i:
@@ -2809,7 +2836,18 @@ void _apexogsweep_pct(real scalar level)
 //     d/db_d     = b_d * mean(-eta*phi * d) + mean(phi)
 //     d/db_chat  = b_d * mean(-eta*phi * chat0)
 //
-//   Delta-method SE: sqrt( J_beta * V_beta_MT * J_beta' )
+//   v0.21.0 -- full two-step influence function of the target.  The effect
+//   q_i depends on pi-hat not only through the probit coefficients (the
+//   Murphy-Topel channel above) but DIRECTLY through chat0_i in the index:
+//     J_pi_k  = mean( Dq_i * g_k,i * w_dchat_k,i * W_k,i' ),
+//               Dq_i = d q_i / d(index shift), g_k,i = d eta_i / d chat_k,i
+//     l_i     = psi_2,i' J_beta' + sum_k psi_pi_k,i' J_pi_k'
+//               psi_2,i = H_b^{-1} s_total_i   (the MT influence of beta-hat)
+//     SE      = sqrt( sum_i l_i^2 )   (cluster-summed l_i under vce(cluster))
+//   Through v0.20.1 only the first term was used (so does cfprobit + margins,
+//   which treats the stored control function as a fixed regressor); the
+//   omission is about 1% of the SE in the validation designs.  Checked by
+//   _sanity/59_direct_channel.do against a formula-free oracle.
 //   level x 100 % CI: APE +/- invnormal(1 - alpha/2) * SE
 // ----------------------------------------------------------------------------
 // Multi-endog, multi-target (v0.8).
@@ -2839,8 +2877,10 @@ void _apexogfit_apese_mt(string scalar yvar,
     real colvector   psi, psi_eta_psi, w_dchat_k, A2_k, ones_col, mean_term
     real colvector   eta_1, eta_0, Phi_1, Phi_0, phi_1, phi_0, diff_phi
     real colvector   g_k, cf_a, cf_b
-    real rowvector   b_pr, J_beta
-    real matrix      Jall, Vtgt
+    real rowvector   b_pr, J_beta, J_pi
+    real matrix      Jall, Vtgt, PSI1, GWD, psi2, L
+    real colvector   Dq
+    real scalar      clustered
     real scalar      n_exog, n_iv, n_endog, n_obs, nx, nw, j, k, ci, n_cf
     real scalar      cf_start_idx, cc, aa, bb, m_partner, cf_col_k
     real scalar      d_start_idx, chat_start_idx, cons_idx
@@ -3054,25 +3094,37 @@ void _apexogfit_apese_mt(string scalar yvar,
         }
 
         s_total = s_total + psi_pi_k * J2pi_k'       // N x nx (product)
+
+        // v0.21.0: keep the first-stage influence functions and the per-obs
+        // derivative of the index w.r.t. pi_k (d eta_i/d pi_k' = g_k,i *
+        // w_dchat_k,i * W_k,i') for the direct term of the target's variance.
+        if (k == 1) {
+            PSI1 = psi_pi_k
+            GWD  = (g_k :* w_dchat_k) :* W_k
+        }
+        else {
+            PSI1 = (PSI1, psi_pi_k)
+            GWD  = (GWD, (g_k :* w_dchat_k) :* W_k)
+        }
     }
 
     // ---------- meat: cluster-robust or sandwich ----------
-    if (clustvarname != "") {
+    clustered = (clustvarname != "")
+    if (clustered) {
         st_view(cluster_ids, ., clustvarname, touse)
         sort_idx       = order(cluster_ids, 1)
         cluster_sorted = cluster_ids[sort_idx, .]
-        s_sorted       = s_total[sort_idx, .]
         info = panelsetup(cluster_sorted, 1)
-        S_clust = J(rows(info), nx, 0)
-        for (ci = 1; ci <= rows(info); ci++) {
-            S_clust[ci, .] = colsum(s_sorted[|info[ci,1], 1 \ info[ci,2], nx|])
-        }
-        meat = cross(S_clust, S_clust)
     }
     else {
-        meat = cross(s_total, s_total)
+        sort_idx = J(0, 0, .)
+        info     = J(0, 0, .)
     }
+    meat      = _apexogfit_meat(s_total, sort_idx, info, clustered)
     V_beta_MT = U_2 * meat * U_2
+    // v0.21.0: per-obs influence of the probit coefficients (N x nx); the
+    // target's full influence is psi2 * J_beta' + PSI1 * J_pi'.
+    psi2 = s_total * U_2
 
     // ---------- TARGET FUNCTIONAL: APE (per endog) OR AIE (single) ----------
     real colvector ape_vec, se_vec, lo_vec, hi_vec
@@ -3149,6 +3201,7 @@ void _apexogfit_apese_mt(string scalar yvar,
 
             T_aie     = -eta :* w_aie :- a_aie :* b_aie
             phi_T_aie = phi_eta :* T_aie
+            Dq        = phi_T_aie                      // d AIE_i / d(index shift)
             for (j = 1; j <= nx; j++) {
                 J_beta_aie[j] = mean(phi_T_aie :* x_main[., j])
             }
@@ -3229,6 +3282,7 @@ void _apexogfit_apese_mt(string scalar yvar,
             // special columns explicitly (overriding any earlier generic value).
             real colvector G_i
             G_i = -eta_b1 :* phi_b1 :* (b_CTS + b_XZ_coef) :+ eta_b0 :* phi_b0 :* b_CTS
+            Dq  = G_i                                  // d AIE_i / d(index shift)
             for (j = 1; j <= nx; j++) {
                 J_beta_aie[j] = mean(G_i :* x_main[., j])
             }
@@ -3286,6 +3340,7 @@ void _apexogfit_apese_mt(string scalar yvar,
             //   ∂AIE_i/∂beta_k = x_main_i[k] * (phi_11 - phi_10 - phi_01 + phi_00)
             real colvector D_phi
             D_phi = phi_11 :- phi_10 :- phi_01 :+ phi_00
+            Dq    = D_phi                              // d AIE_i / d(index shift)
             for (j = 1; j <= nx; j++) {
                 J_beta_aie[j] = mean(D_phi :* x_main[., j])
             }
@@ -3315,8 +3370,11 @@ void _apexogfit_apese_mt(string scalar yvar,
             _error("_apexogfit_apese_mt: unknown aie_case = " + strofreal(aie_case))
         }
 
-        // Delta-method SE (shared across cases)
-        se_sq_aie = (J_beta_aie * V_beta_MT * J_beta_aie')[1, 1]
+        // Full two-step influence function and its (cluster) variance
+        // (v0.21.0; through v0.20.1: J_beta_aie * V_beta_MT * J_beta_aie').
+        J_pi      = mean(Dq :* GWD)                     // 1 x sum_k nw_k
+        L         = psi2 * J_beta_aie' + PSI1 * J_pi'   // N x 1
+        se_sq_aie = _apexogfit_meat(L, sort_idx, info, clustered)[1, 1]
         if (se_sq_aie < 0) {
             printf("{err}_apexogfit_apese_mt: J*V*J' = %g < 0 for AIE.\n", se_sq_aie)
             se_aie = .
@@ -3348,6 +3406,7 @@ void _apexogfit_apese_mt(string scalar yvar,
     lo_vec  = J(n_endog, 1, .)
     hi_vec  = J(n_endog, 1, .)
     Jall    = J(nx, n_endog, 0)      // stacked Jacobians for the cross-target cov
+    L       = J(n_obs, n_endog, 0)   // per-target full influence functions (v0.21.0)
 
     for (t = 1; t <= n_endog; t++) {
         target_idx_t      = d_start_idx + t - 1
@@ -3367,6 +3426,7 @@ void _apexogfit_apese_mt(string scalar yvar,
             phi_0    = normalden(eta_0)
             diff_phi = phi_1 - phi_0
             ape_vec[t] = mean(Phi_1 - Phi_0)
+            Dq         = diff_phi                      // d q_i / d(index shift)
 
             // Jacobian:
             //   d/d(b_const)        = mean(phi_1 - phi_0)
@@ -3396,6 +3456,7 @@ void _apexogfit_apese_mt(string scalar yvar,
             mean_phi   = mean(phi_eta)
             ape_vec[t] = mean_phi * b_d_t
             mean_term  = -eta :* phi_eta
+            Dq         = b_d_t :* mean_term            // d q_i / d(index shift)
 
             for (j = 1; j <= n_exog; j++) {
                 J_beta[j] = b_d_t * mean(mean_term :* X_exog[., j])
@@ -3418,10 +3479,22 @@ void _apexogfit_apese_mt(string scalar yvar,
 
         Jall[., t] = J_beta'
 
-        // Delta-method SE for target t
-        se_sq_t = (J_beta * V_beta_MT * J_beta')[1,1]
+        // Full two-step influence function of target t (v0.21.0; through
+        // v0.20.1 the SE was sqrt(J_beta * V_beta_MT * J_beta')).
+        J_pi    = mean(Dq :* GWD)                      // 1 x sum_k nw_k
+        L[., t] = psi2 * J_beta' + PSI1 * J_pi'
+    }
+
+    // Full cross-target covariance = (cluster) outer product of the stacked
+    // influence functions.  Diagonal = se_vec^2; off-diagonals give the
+    // covariance between the targets' APEs (used for ereturn post).
+    Vtgt = _apexogfit_meat(L, sort_idx, info, clustered)
+    Vtgt = (Vtgt + Vtgt') / 2
+    st_matrix("_apexogVTGT", Vtgt)
+    for (t = 1; t <= n_endog; t++) {
+        se_sq_t = Vtgt[t, t]
         if (se_sq_t < 0) {
-            printf("{err}_apexogfit_apese_mt: J*V*J' = %g < 0 for target %g.\n", se_sq_t, t)
+            printf("{err}_apexogfit_apese_mt: variance = %g < 0 for target %g.\n", se_sq_t, t)
             se_t = .
         }
         else se_t = sqrt(se_sq_t)
@@ -3429,13 +3502,6 @@ void _apexogfit_apese_mt(string scalar yvar,
         lo_vec[t] = ape_vec[t] - z_crit*se_t
         hi_vec[t] = ape_vec[t] + z_crit*se_t
     }
-
-    // Full cross-target covariance: Jall' V_beta_MT Jall (symmetrized).
-    // Diagonal == se_vec^2; off-diagonals give the covariance between the
-    // targets' APEs through the shared V_beta (used for ereturn post).
-    Vtgt = Jall' * V_beta_MT * Jall
-    Vtgt = (Vtgt + Vtgt') / 2
-    st_matrix("_apexogVTGT", Vtgt)
 
     // ---------- Return result vectors as Stata matrices ----------
     st_matrix(mname_ape, ape_vec)
