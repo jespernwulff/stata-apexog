@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.21.0  2026-11-08}{...}
+{* *! version 0.21.1  2026-11-11}{...}
 {vieweralsosee "[R] cfprobit" "help cfprobit"}{...}
 {vieweralsosee "[R] cfregress" "help cfregress"}{...}
 {vieweralsosee "[R] biprobit" "help biprobit"}{...}
@@ -730,6 +730,20 @@ on pi_hat, so the APE equals mean(phi) * (b_d + b_z/pi_z) from a plain
 probit of y on the controls, d and z, whose stacked delta-method variance
 the two-term formula reproduces to machine precision.
 {opt firststage(biprobit)} is a joint MLE and is not affected.
+
+{pstd}
+{ul:Fractional-probit first stage (version 0.21.1).}  The first-stage weight
+A_i is minus the derivative of the control function in the first-stage index,
+d(chat_i)/d(W_i'pi) = -A_i; it is also the weight of the first-stage Hessian.
+For {opt firststage(probit)}, A_i = chat_i*(W_i'pi + chat_i), an identity that
+needs a 0/1 regressor.  For {opt firststage(fprobit)} with a fractional
+regressor the derivative has one more term,
+A_i = chat_i*(W_i'pi + chat_i) + d_i(1 - d_i)*[phi/(Phi(1 - Phi))]^2,
+which version 0.21.1 uses; versions through 0.21.0 used the probit identity
+there.  Point estimates are unchanged, and the mean fprobit standard error
+moves by at most about 3%, in either direction, in the validation design (the
+two places the weight enters largely offset each other).  With the corrected weight the first-stage
+influence functions reproduce the robust variance of {cmd:fracreg} exactly.
 
 {pstd}
 For cluster-robust SEs, the meat is replaced by the sum of OUTER products

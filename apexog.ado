@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.21.0  2026-11-08
+*! Version 0.21.1  2026-11-11
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -10,6 +10,15 @@
 *! Documentation: help apexog, https://jespernwulff.github.io/apexog/
 *
 * Version history (user-visible changes; help apexog has the details)
+*   0.21.1  firststage(fprobit): the first-stage weight (minus the derivative
+*           of the generalized residual in the first-stage index, also the
+*           first-stage Hessian weight) now uses the formula for a fractional
+*           regressor, chat*(Wpi+chat) + d(1-d)*[phi/(Phi(1-Phi))]^2.
+*           Versions up to 0.21.0 used the binary-probit identity
+*           chat*(Wpi+chat), which holds only for a 0/1 regressor.  Point
+*           estimates unchanged; fprobit standard errors move by about 1-3%
+*           on average in the validation design.  All other first stages,
+*           and firststage(fprobit) with a 0/1 regressor, are unchanged.
 *   0.21.0  The standard error of every two-step target (APE and AIE, all
 *           first stages, cfinteract, vce(cluster)) now adds the direct
 *           dependence of the effect on the estimated first-stage parameters
@@ -1156,8 +1165,10 @@ program apexog, eclass
     *       - chat0     = control function (residual or generalized residual)
     *       - Wpi_hat   = first-stage linear predictor (used by Mata for the
     *                     per-obs MT weight A_i in nonlinear first stages)
-    *       - A_per_obs = per-obs MT weight: 1 for linear, chat0*(Wpi+chat0)
-    *                     for probit
+    *       - A_per_obs = per-obs MT weight = -d(chat0)/d(Wpi): 1 for linear,
+    *                     chat0*(Wpi+chat0) for probit, the same plus
+    *                     d(1-d)*[phi/(Phi(1-Phi))]^2 for fprobit, exp(Wpi)
+    *                     for poisson
     *==========================================================================
     * Build the vce() option string that goes into regress/probit/etc.
     if "`vcetype'" == "robust" local vce_opt = "vce(robust)"
@@ -1231,7 +1242,14 @@ program apexog, eclass
             qui gen double `chat0_`j'' = (`dj' - normal(`Wpi_`j'')) * normalden(`Wpi_`j'') ///
                                          / (normal(`Wpi_`j'') * normal(-`Wpi_`j''))     ///
                                          if `touse'
-            qui gen double `A_`j'' = `chat0_`j'' * (`Wpi_`j'' + `chat0_`j'') if `touse'
+            * v0.21.1: -d(chat0)/d(Wpi) for a FRACTIONAL d.  The identity
+            * chat0*(Wpi+chat0) of the binary probit needs d in {0,1}; for
+            * d in (0,1) the derivative has the extra term d(1-d)*lam^2,
+            * lam = phi(Wpi)/[Phi(Wpi)(1-Phi(Wpi))] (zero when d is 0 or 1).
+            qui gen double `A_`j'' = `chat0_`j'' * (`Wpi_`j'' + `chat0_`j'')               ///
+                + `dj' * (1 - `dj') * (normalden(`Wpi_`j'')                               ///
+                                       / (normal(`Wpi_`j'') * normal(-`Wpi_`j'')))^2      ///
+                if `touse'
         }
         else if "`fst'" == "poisson" {
             qui poisson `dj' `iv_for_endog_`j'' `exog_for_endog_`j'' if `touse', `vce_opt'
@@ -2804,6 +2822,9 @@ real matrix _apexogfit_meat(real matrix M, real matrix sort_idx,
 // Unified for linear and probit first stages via a per-obs weight A_i:
 //   linear:  A_i = 1                                  =>  w_dchat_i = -A_i = -1
 //   probit:  A_i = chat0_i * (W_i'*pi + chat0_i)      =>  w_dchat_i = -A_i
+//   fprobit: A_i = chat0_i * (W_i'*pi + chat0_i)
+//                  + d_i(1-d_i)*[phi/(Phi(1-Phi))]^2   =>  w_dchat_i = -A_i
+//   poisson: A_i = exp(W_i'*pi)                       =>  w_dchat_i = -A_i
 // where w_dchat_i = d(chat0_i) / d(W_i'*pi) -- the per-obs derivative of the
 // control function with respect to the first-stage linear predictor.
 //

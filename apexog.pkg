@@ -18,6 +18,16 @@ d   first-stage term) computed in Mata; at gamma = 0 the point estimate
 d   matches cfprobit + margins, dydx() to machine precision and the SE
 d   differs from it by the direct term only (about 1%).
 d
+d   Features (v0.21.1):
+d     - firststage(fprobit): the first-stage weight (minus the derivative
+d       of the generalized residual in the first-stage index) now uses the
+d       formula for a fractional regressor, chat*(Wpi+chat) +
+d       d(1-d)*[phi/(Phi(1-Phi))]^2; earlier versions used the binary-probit
+d       identity, valid only for a 0/1 regressor.  Point estimates unchanged;
+d       the mean fprobit standard error moves by at most about 3%, in either
+d       direction, in the validation design.  All other first stages are
+d       unchanged.
+d
 d   Features (v0.21.0):
 d     - the standard error of every two-step target (APE and AIE, all
 d       first stages, cfinteract, vce(cluster)) adds the direct dependence
@@ -161,7 +171,7 @@ d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhu
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d License: MIT (https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE)
 d
-d Distribution-Date: 20261108
+d Distribution-Date: 20261111
 d
 f apexog.ado
 f apexog.sthlp
