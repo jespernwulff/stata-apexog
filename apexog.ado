@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.21.1  2026-11-11
+*! Version 0.21.2  2026-11-14
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -10,6 +10,18 @@
 *! Documentation: help apexog, https://jespernwulff.github.io/apexog/
 *
 * Version history (user-visible changes; help apexog has the details)
+*   0.21.2  Display and documentation only: no estimate, standard error or
+*           interval changes.  The header's standard-error label reads
+*           "two-step" (the Murphy-Topel parameter covariance plus the direct
+*           first-stage term, as computed since 0.21.0).  Header note when a
+*           0/1 endogenous regressor has a linear first stage (a descriptive
+*           fitted contrast).  With gunits(structural): a line that the
+*           conversion uses the baseline sigma_tilde and, for one continuous
+*           endogenous regressor with one instrument and a linear first stage,
+*           the limit
+*           |pi_z|/sigma_v below which a structural value has a unique
+*           index-scale counterpart, with a warning when the box or the
+*           prior draws reach it.  New e(gs_max).
 *   0.21.1  firststage(fprobit): the first-stage weight (minus the derivative
 *           of the generalized residual in the first-stage index, also the
 *           first-stage Hessian weight) now uses the formula for a fractional
@@ -1195,6 +1207,13 @@ program apexog, eclass
     * to drop the AIE tempvar when the endog itself is an interactor).
     local chat0_list ""
     local A_list     ""
+    * v0.21.2 (display only; no computation uses either):
+    *   _binlin        0/1 endogenous regressors that get a linear first stage
+    *   _apexogGSMAX   |pi_z|/sigma_v, defined for ONE continuous (not 0/1)
+    *                  endogenous regressor with ONE instrument and a linear
+    *                  first stage; missing otherwise
+    local _binlin ""
+    scalar _apexogGSMAX = .
     local j = 0
     foreach dj of local varlist2 {
         local ++j
@@ -1227,6 +1246,26 @@ program apexog, eclass
             qui predict double `chat0_`j'' if `touse', residuals
             qui predict double `Wpi_`j''   if `touse', xb
             qui gen double `A_`j'' = 1 if `touse'
+            * v0.21.2 (display only).  A 0/1 regressor cannot have the normal
+            * linear first stage of the control-function model: flag it for the
+            * header note (the product regressor of an endogenous interaction
+            * is skipped; its treatment variable carries the flag).
+            capture assert inlist(`dj', 0, 1) if `touse'
+            local _dj01 = (_rc == 0)
+            if `_dj01' & "`dj'" != "`aieendog_tempvar'" local _binlin "`_binlin' `dj'"
+            * The limit of the structural scale, |pi_z|/sigma_v (help apexog,
+            * gunits(structural)): one CONTINUOUS endogenous regressor, one
+            * instrument.  Not defined for a 0/1 regressor, for which the linear
+            * normal first stage behind the conversion cannot hold.
+            local _niv_j : word count `iv_for_endog_`j''
+            if `count2' == 1 & `count_iv' == 1 & `_niv_j' == 1 & !`_dj01' {
+                local _ivone : word 1 of `iv_for_endog_`j''
+                capture scalar _apexogGSMAX = abs(_b[`_ivone'])
+                if _rc scalar _apexogGSMAX = .
+                qui summarize `chat0_`j'' if `touse'
+                if r(sd) > 0 & r(sd) < . scalar _apexogGSMAX = scalar(_apexogGSMAX) / r(sd)
+                else                     scalar _apexogGSMAX = .
+            }
         }
         else if "`fst'" == "probit" {
             qui probit `dj' `iv_for_endog_`j'' `exog_for_endog_`j'' if `touse', `vce_opt'
@@ -1437,6 +1476,12 @@ program apexog, eclass
         capture scalar _apexogBPRHO0 = scalar(_apexogBPRHO)
         if _rc scalar _apexogBPRHO0 = .
     }
+    * v0.21.2 (display only): the user's box in STRUCTURAL units, kept for the
+    * header warning (gmin/gmax are overwritten with index values just below).
+    local _gs_boxmax = .
+    if "`gunits'" == "structural" & "`method'" == "uci" & `count_iv' == 1 {
+        local _gs_boxmax = max(abs(`gmin1'), abs(`gmax1'))
+    }
     if "`gunits'" == "pr" | "`gunits'" == "structural" {
         if "`gunits'" == "pr" {
             if _apexogMPHI0 >= . {
@@ -1597,7 +1642,11 @@ program apexog, eclass
             else {
                 di as text "Plausibly-exogenous APE bounds (CHR 2012, UCI method)"
             }
-            _apexoghdr, engine(`engine') firststage(`firststage') n(`N')
+            local _blopt ""
+            local _binlin : list clean _binlin
+            if "`_binlin'" != "" local _blopt "binlin(`_binlin')"
+            if "`_binlin'" != "" & `aie_active' local _blopt "`_blopt' aie"
+            _apexoghdr, engine(`engine') firststage(`firststage') n(`N') `_blopt'
             if `aie_active' {
                 if "`target_aie_spec'" != "" {
                     di as text "Target:    Average Interaction Effect (`target_aie_spec')"
@@ -1659,6 +1708,23 @@ program apexog, eclass
                 if `_grfs' {
                     * v0.19.1: the conversion is a linear-first-stage result
                     di as text "Warning:   sigma_tilde conversion derived for a LINEAR first stage (see help)."
+                }
+                * v0.21.2: baseline conversion, and the limit of the structural scale
+                local _binlin : list clean _binlin
+                if "`_binlin'" != "" {
+                    di as text "Warning:   sigma_tilde conversion not derived for a 0/1 regressor (see Note)."
+                }
+                else if "`engine'" == "cf" & !`_grfs' {
+                    di as text "           The conversion uses the baseline sigma_tilde, exact only at gamma = 0."
+                }
+                if scalar(_apexogGSMAX) < . {
+                    di as text "           A structural value has a unique index-scale counterpart only below"
+                    di as text "           |pi_z|/sigma_v = " %6.4f scalar(_apexogGSMAX) " in absolute value (see help)."
+                    if `_gs_boxmax' < . {
+                        if `_gs_boxmax' >= scalar(_apexogGSMAX) {
+                            di as text "Warning:   the box reaches " %6.4f `_gs_boxmax' " structural units, at or beyond that limit."
+                        }
+                    }
                 }
             }
             di as text " "
@@ -1771,6 +1837,7 @@ program apexog, eclass
         ereturn scalar level         = `level'
         ereturn scalar mphi          = scalar(_apexogMPHI0)
         ereturn scalar stilde        = scalar(_apexogSTILDE0)
+        ereturn scalar gs_max        = scalar(_apexogGSMAX)
         if "`engine'" == "biprobit" ereturn scalar rho = scalar(_apexogBPRHO0)
         ereturn local  gunits        "`gunits'"
         ereturn scalar baseline_ape  = `baseline_ape'
@@ -1943,7 +2010,11 @@ program apexog, eclass
             else {
                 di as text "Plausibly-exogenous APE bounds (CHR 2012, LTZ method, `ltz_mode' prior)"
             }
-            _apexoghdr, engine(`engine') firststage(`firststage') n(`N')
+            local _blopt ""
+            local _binlin : list clean _binlin
+            if "`_binlin'" != "" local _blopt "binlin(`_binlin')"
+            if "`_binlin'" != "" & `aie_active' local _blopt "`_blopt' aie"
+            _apexoghdr, engine(`engine') firststage(`firststage') n(`N') `_blopt'
             if `aie_active' {
                 if "`target_aie_spec'" != "" {
                     di as text "Target:    Average Interaction Effect (`target_aie_spec')"
@@ -2000,6 +2071,23 @@ program apexog, eclass
                 if `_grfs' {
                     * v0.19.1: the conversion is a linear-first-stage result
                     di as text "Warning:   sigma_tilde conversion derived for a LINEAR first stage (see help)."
+                }
+                * v0.21.2: baseline conversion, and the limit of the structural scale
+                local _binlin : list clean _binlin
+                if "`_binlin'" != "" {
+                    di as text "Warning:   sigma_tilde conversion not derived for a 0/1 regressor (see Note)."
+                }
+                else if "`engine'" == "cf" & !`_grfs' {
+                    di as text "           The conversion uses the baseline sigma_tilde, exact only at gamma = 0."
+                }
+                if scalar(_apexogGSMAX) < . {
+                    di as text "           A structural value has a unique index-scale counterpart only below"
+                    di as text "           |pi_z|/sigma_v = " %6.4f scalar(_apexogGSMAX) " in absolute value (see help)."
+                    * share of the prior draws (index units * sigma_tilde = structural units) at or beyond it
+                    mata: st_local("_gs_share", strofreal(mean(abs(st_matrix("_apexogGSIM")[., 1]) :* st_numscalar("_apexogSTILDE0") :>= st_numscalar("_apexogGSMAX")), "%21.15g"))
+                    if `_gs_share' > 0 {
+                        di as text "Warning:   " %4.1f 100*`_gs_share' "% of the prior draws are at or beyond that limit."
+                    }
                 }
             }
             di as text " "
@@ -2235,6 +2323,7 @@ program apexog, eclass
         ereturn scalar baseline_se   = `baseline_se'
         ereturn scalar mphi          = scalar(_apexogMPHI0)
         ereturn scalar stilde        = scalar(_apexogSTILDE0)
+        ereturn scalar gs_max        = scalar(_apexogGSMAX)
         if "`engine'" == "biprobit" ereturn scalar rho = scalar(_apexogBPRHO0)
         ereturn local  gunits        "`gunits'"
         if `n_sweep' > 0 {
@@ -2640,14 +2729,31 @@ end
 * displays, plus the disclosure note for generalized-residual first stages.
 *==============================================================================
 program _apexoghdr
-    syntax, engine(string) firststage(string) n(string)
+    syntax, engine(string) firststage(string) n(string) [binlin(string) AIE]
     if "`engine'" == "biprobit" {
         di as text "Estimator: biprobit (recursive bivariate probit, MLE)  |  SE: delta method  |  N = `n'"
         di as text "           outcome and 0/1 treatment fit jointly under bivariate normality;"
         di as text "           gamma is an offset in the outcome equation; no generated regressor."
     }
     else {
-        di as text "Estimator: cfprobit  |  First stage: `firststage'  |  SE: Murphy-Topel  |  N = `n'"
+        * v0.21.2: "two-step" = the Murphy-Topel parameter covariance plus the
+        * direct first-stage term of the effect (the SE computed since 0.21.0)
+        di as text "Estimator: cfprobit  |  First stage: `firststage'  |  SE: two-step  |  N = `n'"
+        if "`binlin'" != "" {
+            * v0.21.2: a 0/1 endogenous regressor with a linear first stage
+            di as text "Note:      0/1 endogenous regressor with a linear first stage (`binlin'):"
+            di as text "           a binary treatment cannot have the normal linear first stage the"
+            di as text "           control-function model assumes, so the effect is a descriptive"
+            if "`aie'" != "" {
+                * the exact engine and the probit first stage are not available
+                * for a 0/1 treatment inside an interaction
+                di as text "           fitted contrast without a causal interpretation (see help)."
+            }
+            else {
+                di as text "           fitted contrast without a causal interpretation.  For a causal"
+                di as text "           reading use firststage(biprobit) or firststage(probit); see help."
+            }
+        }
         local _gr = 0
         foreach _f of local firststage {
             if inlist("`_f'", "probit", "fprobit", "poisson") local _gr = 1

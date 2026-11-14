@@ -18,6 +18,20 @@ d   first-stage term) computed in Mata; at gamma = 0 the point estimate
 d   matches cfprobit + margins, dydx() to machine precision and the SE
 d   differs from it by the direct term only (about 1%).
 d
+d   Features (v0.21.2):
+d     - display and documentation only; no estimate, standard error or
+d       interval changes.  The header's standard-error label reads
+d       "two-step" (Murphy-Topel parameter covariance plus the direct
+d       first-stage term, as computed since v0.21.0).  A header note when a
+d       0/1 endogenous regressor has a linear first stage: a descriptive
+d       fitted contrast, not a causal estimate.  With gunits(structural), a
+d       line that the conversion uses the baseline sigma_tilde and, for one
+d       continuous endogenous regressor with one instrument and a linear first stage,
+d       the limit |pi_z|/sigma_v below which a structural value has a unique
+d       index-scale counterpart (new e(gs_max)), with a warning when the uci
+d       box or the ltz prior draws reach it.  Help file: validation figures
+d       updated to v0.21.1.
+d
 d   Features (v0.21.1):
 d     - firststage(fprobit): the first-stage weight (minus the derivative
 d       of the generalized residual in the first-stage index) now uses the
@@ -171,7 +185,7 @@ d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhu
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d License: MIT (https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE)
 d
-d Distribution-Date: 20261111
+d Distribution-Date: 20261114
 d
 f apexog.ado
 f apexog.sthlp
