@@ -1,5 +1,5 @@
 *! apexog: APE/AIE bounds for cfprobit under plausibly exogenous IV (CHR 2012)
-*! Version 0.21.2  2026-11-14
+*! Version 0.22.0  2026-11-15
 *! Copyright (c) 2026 Jesper N. Wulff, Aarhus University.  Licensed under
 *! the MIT License -- see https://github.com/jespernwulff/stata-apexog
 *! SPDX-License-Identifier: MIT
@@ -10,7 +10,16 @@
 *! Documentation: help apexog, https://jespernwulff.github.io/apexog/
 *
 * Version history (user-visible changes; help apexog has the details)
-*   0.21.2  Display and documentation only: no estimate, standard error or
+*   0.22.0  firststage(biprobit) accepts an AIE target: the interaction of the
+*           0/1 treatment with an exogenous moderator (binary or continuous),
+*           e.g. (d = z c.z#c.m), firststage(biprobit) target(i.d#i.m) with m
+*           among the controls.  The product d*m enters the outcome equation
+*           of the joint fit only (the treatment equation excludes it); the
+*           target is the second difference (binary moderator) or the
+*           difference in the moderator slope (continuous moderator) of the
+*           average structural function under joint normality, with an MLE
+*           delta-method SE.  Every other path is unchanged.
+*   0.21.2Display and documentation only: no estimate, standard error or
 *           interval changes.  The header's standard-error label reads
 *           "two-step" (the Murphy-Topel parameter covariance plus the direct
 *           first-stage term, as computed since 0.21.0).  Header note when a
@@ -663,6 +672,11 @@ program apexog, eclass
         if "`firststage_`k''" == "biprobit" local ++_n_bp
     }
     if `_n_bp' > 0 {
+        if `count2' > 1 & "`aieendog_tempvar'" != "" {
+            * v0.22.0: the endogenous-interaction clause of the control-function
+            * engine; with the joint fit the product needs no equation of its own
+            _apexogerr "firststage(biprobit) fits the 0/1 treatment jointly with `yvar', so the interaction needs no first stage of its own.  Write the treatment alone in the clause, put the moderator among the controls and name the interaction in target(), e.g.  apexog uci y x m (d = z c.z#c.m), firststage(biprobit) target(i.d#i.m)"
+        }
         if `count2' > 1 {
             _apexogerr "firststage(biprobit) supports exactly ONE endogenous regressor (the model has `count2'): it fits the recursive bivariate probit of `yvar' and a single 0/1 treatment.  Use the control-function first stages (linear/probit/fprobit/poisson) with several endogenous regressors."
         }
@@ -1123,7 +1137,10 @@ program apexog, eclass
         * Diagnostic note when an interactor is endogenous
         local _xin_endog : list aie_X in varlist2
         local _zin_endog : list aie_Z in varlist2
-        if `_xin_endog' | `_zin_endog' {
+        if (`_xin_endog' | `_zin_endog') & "`engine'" == "biprobit" {
+            di as text "  [note] AIE: the treatment is fit jointly with the outcome (recursive bivariate probit); the product enters the outcome equation only."
+        }
+        else if `_xin_endog' | `_zin_endog' {
             di as text "  [note] AIE: one or both interactors are endogenous; the MT correction propagates first-stage uncertainty into the AIE SE."
         }
     }
@@ -1134,7 +1151,18 @@ program apexog, eclass
     }
 
     if "`engine'" == "biprobit" & `aie_active' {
-        _apexogerr "firststage(biprobit) targets the APE of the single 0/1 endogenous regressor; the AIE target (aie() / target(c.X#i.d)) is not available with the bivariate-probit engine."
+        * v0.22.0: the AIE of the 0/1 treatment and ONE exogenous moderator
+        * (binary or continuous).  The product (aie_XZ) is an outcome-equation
+        * regressor only: exog_for_endog_1 below drops it from the treatment
+        * equation.  Pairs of two exogenous variables, and a continuous
+        * treatment, are not supported with this engine.
+        local _bpd : word 1 of `varlist2'
+        if "`aie_X'" != "`_bpd'" & "`aie_Z'" != "`_bpd'" {
+            _apexogerr "With firststage(biprobit) the AIE target must interact the 0/1 treatment `_bpd' with an exogenous moderator, e.g. target(i.`_bpd'#i.m) with m among the controls."
+        }
+        if ("`aie_X'" == "`_bpd'" & `aie_X_binary' == 0) | ("`aie_Z'" == "`_bpd'" & `aie_Z_binary' == 0) {
+            _apexogerr "With firststage(biprobit) the treatment `_bpd' enters the interaction as a 0/1 variable: write i.`_bpd', not c.`_bpd', in target()."
+        }
     }
 
     *==========================================================================
@@ -1429,7 +1457,7 @@ program apexog, eclass
         offvar(`offvar') aweightlist(`A_list')                              ///
         exoglist(`varlist1') ivlist(`varlist_iv')                           ///
         clustvar(`clustvar') vcetype(`vcetype')                             ///
-        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine')                         ///
+        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine') trexog(`exog_for_endog_1')                         ///
         level(`level') `debug'
     * First-endog scalars (back-compat)
     local baseline_ape = r(ape)
@@ -1602,7 +1630,7 @@ program apexog, eclass
                 offvar(`offvar') aweightlist(`A_list')                          ///
                 exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                 clustvar(`clustvar') vcetype(`vcetype')                         ///
-                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine')                     ///
+                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine') trexog(`exog_for_endog_1')                     ///
                 gammas(`_gams') ivbin(`ivbin')                                  ///
                 level(`level') `debug'
             matrix _apexogITER_APE = r(ape_vec)
@@ -1972,7 +2000,7 @@ program apexog, eclass
                 offvar(`offvar') aweightlist(`A_list')                          ///
                 exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                 clustvar(`clustvar') vcetype(`vcetype')                         ///
-                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine')                     ///
+                aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine') trexog(`exog_for_endog_1')                     ///
                 gammas(`_gams') ivbin(`ivbin')                                  ///
                 level(`level') `debug'
 
@@ -2206,7 +2234,7 @@ program apexog, eclass
                         offvar(`offvar') aweightlist(`A_list')                          ///
                         exoglist(`varlist1') ivlist(`varlist_iv')                       ///
                         clustvar(`clustvar') vcetype(`vcetype')                         ///
-                        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine') ///
+                        aiex(`aie_X') aiez(`aie_Z') aiexz(`aie_XZ') aiecase(`aie_case') cfprodlist(`cfprod_list') engine(`engine') trexog(`exog_for_endog_1') ///
                         level(`level')
                     matrix _apexogITER_APE = r(ape_vec)
                     matrix _apexogITER_SE  = r(se_vec)
@@ -2416,6 +2444,7 @@ program _apexogfit, rclass
         [chat0list(string) aweightlist(string)                              ///
          clustvar(string) aiex(string) aiez(string) aiexz(string)           ///
          aiecase(integer 0) cfprodlist(string) engine(string)               ///
+         trexog(string)                                                     ///
          gammas(string) ivbin(string) debug]
 
     if "`debug'" != "" {
@@ -2438,17 +2467,23 @@ program _apexogfit, rclass
     * first successful fit of the run, dropped by _apexogclean at exit).
     if "`engine'" == "biprobit" {
         local _n_endog : word count `endoglist'
+        * v0.22.0: the treatment equation's exogenous regressors.  The caller
+        * passes exog_for_endog_1, which equals exoglist except that an AIE
+        * product of the treatment and a moderator is dropped (it belongs to
+        * the outcome equation only).  Empty -> exoglist.
+        local _trx "`exoglist'"
+        if "`trexog'" != "" local _trx "`trexog'"
         local _from ""
         capture confirm matrix _apexogBP_B0
         if _rc == 0 local _from "from(_apexogBP_B0, copy)"
         capture {
             if "`debug'" != "" {
                 biprobit (`yvar' = `exoglist' `endoglist', offset(`offvar'))      ///
-                         (`endoglist' = `ivlist' `exoglist') if `touse', `_vce' `_from'
+                         (`endoglist' = `ivlist' `_trx') if `touse', `_vce' `_from'
             }
             else {
                 quietly biprobit (`yvar' = `exoglist' `endoglist', offset(`offvar')) ///
-                         (`endoglist' = `ivlist' `exoglist') if `touse', `_vce' `_from'
+                         (`endoglist' = `ivlist' `_trx') if `touse', `_vce' `_from'
             }
         }
         local _rc = _rc
@@ -2460,6 +2495,15 @@ program _apexogfit, rclass
             else if e(N) < r(N)  local _bad "biprobit used `e(N)' of `r(N)' obs"
             else if [#1]_b[`endoglist'] == 0 & [#1]_se[`endoglist'] == 0 {
                 local _bad "`endoglist' omitted from the outcome equation (collinear)"
+            }
+            else if "`aiex'" != "" {
+                * v0.22.0: an omitted interactor or product would silently
+                * give an AIE computed with a zero coefficient
+                foreach _v in `aiex' `aiez' `aiexz' {
+                    if [#1]_b[`_v'] == 0 & [#1]_se[`_v'] == 0 {
+                        local _bad "AIE term omitted from the outcome equation (collinear)"
+                    }
+                }
             }
         }
         if "`_bad'" != "" {
@@ -2487,10 +2531,20 @@ program _apexogfit, rclass
         matrix _apexogPR_V = e(V)
         if "`_from'" == "" matrix _apexogBP_B0 = e(b)
         scalar _apexogBPRHO = e(rho)
-        capture noisily ///
-        mata: _apexogfit_bp_ape("`endoglist'", "`offvar'", "`exoglist'",          ///
-                                "_apexogAPE_vec", "_apexogSE_vec",                  ///
-                                "_apexogLO_vec",  "_apexogHI_vec", `level')
+        if "`aiex'" != "" {
+            * v0.22.0: AIE of the treatment and an exogenous moderator
+            capture noisily ///
+            mata: _apexogfit_bp_aie("`endoglist'", "`offvar'", "`exoglist'",      ///
+                                    "`aiex'", "`aiez'", "`aiexz'", `aiecase',      ///
+                                    "_apexogAPE_vec", "_apexogSE_vec",              ///
+                                    "_apexogLO_vec",  "_apexogHI_vec", `level')
+        }
+        else {
+            capture noisily ///
+            mata: _apexogfit_bp_ape("`endoglist'", "`offvar'", "`exoglist'",      ///
+                                    "_apexogAPE_vec", "_apexogSE_vec",              ///
+                                    "_apexogLO_vec",  "_apexogHI_vec", `level')
+        }
         if _rc != 0 {
             di as error "[_apexogfit] Mata biprobit APE failed (rc=`_rc')."
         matrix _apexogAPE_vec = J(`_n_endog', 1, .)
@@ -2745,9 +2799,10 @@ program _apexoghdr
             di as text "           a binary treatment cannot have the normal linear first stage the"
             di as text "           control-function model assumes, so the effect is a descriptive"
             if "`aie'" != "" {
-                * the exact engine and the probit first stage are not available
-                * for a 0/1 treatment inside an interaction
-                di as text "           fitted contrast without a causal interpretation (see help)."
+                * v0.22.0: the joint fit is available for the interaction
+                di as text "           fitted contrast without a causal interpretation.  For a causal"
+                di as text "           reading use firststage(biprobit) with the treatment alone in the"
+                di as text "           clause and the moderator among the controls; see help."
             }
             else {
                 di as text "           fitted contrast without a causal interpretation.  For a causal"
@@ -3471,27 +3526,21 @@ void _apexogfit_apese_mt(string scalar yvar,
             for (j = 1; j <= nx; j++) {
                 J_beta_aie[j] = mean(D_phi :* x_main[., j])
             }
-            // X_xmcol correction: ∂eta^{xz}/∂b_X = (x - X_i)
-            //   So at (1,1): (1-X), at (1,0): (1-X), at (0,1): -X, at (0,0): -X
-            //   ∂AIE_i/∂b_X = (1-X)*(phi_11 - phi_10) - X*(phi_01 - phi_00)
-            // The generic above used X_val for x_main[X_xmcol] which is wrong; replace.
-            J_beta_aie[X_xmcol] = mean( (1 :- X_val) :* (phi_11 - phi_10) ) ///
-                                 - mean( X_val :* (phi_01 - phi_00) )
-            // Z_xmcol correction: ∂eta^{xz}/∂b_Z = (z - Z_i)
-            //   ∂AIE_i/∂b_Z = (1-Z)*(phi_11 - phi_01) - Z*(phi_10 - phi_00)
-            J_beta_aie[Z_xmcol] = mean( (1 :- Z_val) :* (phi_11 - phi_01) ) ///
-                                 - mean( Z_val :* (phi_10 - phi_00) )
-            // XZ_idx correction: ∂eta^{xz}/∂b_XZ = (x*z - X*Z)
-            //   at (1,1): (1 - X*Z), at (1,0): -X*Z, at (0,1): -X*Z, at (0,0): -X*Z
-            //   ∂AIE_i/∂b_XZ = (1 - X*Z)*phi_11 + X*Z*(-phi_10 - phi_01 + phi_00)
-            //                = phi_11 - X*Z*(phi_11 + phi_10 + phi_01 - phi_00)
-            //   Wait, redo: ∂AIE_i/∂b_XZ
-            //     = (1-X*Z)*phi_11 - (-X*Z)*phi_10 - (-X*Z)*phi_01 + (-X*Z)*phi_00
-            //     = (1-X*Z)*phi_11 + X*Z*phi_10 + X*Z*phi_01 - X*Z*phi_00
-            //     = phi_11 + X*Z*(phi_10 + phi_01 - phi_00 - phi_11)
-            //     = phi_11 - X*Z*(phi_11 - phi_10 - phi_01 + phi_00)
-            //     = phi_11 - X*Z*D_phi
-            J_beta_aie[XZ_idx] = mean(phi_11) - mean(XZ_val :* D_phi)
+            // The three special columns.  eta^{xz} contains b_X, b_Z and b_XZ
+            // multiplied by the COUNTERFACTUAL values x, z and x*z (eta_i's own
+            // X_i*b_X is replaced, not added to), so
+            //   d eta^{xz}/d b_X = x,  d eta^{xz}/d b_Z = z,  d eta^{xz}/d b_XZ = x*z,
+            // and with the signs (+, -, -, +) of (11, 10, 01, 00):
+            //   dAIE_i/db_X = phi_11 - phi_10,  dAIE_i/db_Z = phi_11 - phi_01,
+            //   dAIE_i/db_XZ = phi_11
+            // (Online Appendix D.1: the counterfactual design row r^{(j,k)}).
+            // v0.22.0 FIX: versions through 0.21.2 used x - X_i, z - Z_i and
+            // x*z - X_i*Z_i here, which is wrong for every observation with
+            // X_i = 1 or Z_i = 1 (point estimates were unaffected; the SE of a
+            // binary-by-binary AIE was wrong).
+            J_beta_aie[X_xmcol] = mean(phi_11 - phi_10)
+            J_beta_aie[Z_xmcol] = mean(phi_11 - phi_01)
+            J_beta_aie[XZ_idx]  = mean(phi_11)
         }
         else {
             _error("_apexogfit_apese_mt: unknown aie_case = " + strofreal(aie_case))
@@ -3736,6 +3785,147 @@ void _apexogfit_bp_ape(string scalar dname,     string scalar offvarname,
     st_matrixrowstripe(mname_se,  ("", dname))
     st_matrixrowstripe(mname_lo,  ("", dname))
     st_matrixrowstripe(mname_hi,  ("", dname))
+    st_matrix("_apexogVTGT", J(1, 1, se^2))
+}
+
+// ----------------------------------------------------------------------------
+// _apexogfit_bp_aie (v0.22.0): AIE + delta-method SE for the recursive
+// bivariate probit engine.  The caller has just fit
+//     biprobit (y = X d, offset(off)) (d = Z X_tr)
+// where X contains the exogenous moderator and the product of the treatment
+// and the moderator (the tempvar aiexz), and X_tr = X without the product.
+// e(b) = [eq1: X, d, _cons | eq2 | athrho]; only the outcome block enters.
+// The outcome error is standard normal, so Phi(eta) is the average structural
+// function and the target is the interaction contrast of the ASF:
+//   aie_case 3 (binary moderator): the second difference
+//       mean_i sum_{j,k} s_jk Phi(eta_i^{jk}),  s_11 = s_00 = 1, s_10 = s_01 = -1,
+//     with eta^{jk} the index at X-interactor = j, Z-interactor = k, product = j*k;
+//   aie_case 1 or 2 (one binary interactor B -- the treatment -- and one
+//   continuous C): the difference in the C-slope across B,
+//       mean_i [ phi(eta^(1)) (b_C + b_CB) - phi(eta^(0)) b_C ],
+//     with eta^(k) the index at B = k, product = C*k.
+// The Jacobian is built from counterfactual design rows x^{jk} (x^(k)), an
+// implementation independent of the control-function AIE code:
+//   case 3:   J = sum_jk s_jk mean_i[ phi(eta^{jk}) x_i^{jk} ]
+//   case 1/2: J = mean_i[ -eta^(1) phi^(1) c1 x^(1) ] + mean(phi^(1)) (e_C + e_CB)
+//               - mean_i[ -eta^(0) phi^(0) c0 x^(0) ] - mean(phi^(0)) e_C,
+//             c1 = b_C + b_CB, c0 = b_C;
+// zero for the treatment equation and athrho.  SE = sqrt(J V J'), V = e(V).
+// Also writes _apexogMPHI and _apexogSTILDE = 1 as _apexogfit_bp_ape does.
+// ----------------------------------------------------------------------------
+void _apexogfit_bp_aie(string scalar dname,     string scalar offvarname,
+                       string scalar exognames,
+                       string scalar aiex,      string scalar aiez,
+                       string scalar aiexz,     real scalar   aie_case,
+                       string scalar mname_ape, string scalar mname_se,
+                       string scalar mname_lo,  string scalar mname_hi,
+                       real scalar   level)
+{
+    string rowvector evars, names
+    string matrix    cstripe
+    real matrix      X_exog, x1, V, xc
+    real colvector   d, off, eta, ec, ph, aie_i, Cv
+    real rowvector   b, b1, Jb, J1, Jk
+    real scalar      n_obs, n1, K, nxc, ix, iz, ixz, ic, ib, j, k, s, cc
+    real scalar      aie, se_sq, se, z_crit
+    string scalar    touse, eq1
+
+    touse = st_local("touse")
+    evars = tokens(exognames)
+    st_view(d,      ., dname,      touse)
+    st_view(off,    ., offvarname, touse)
+    st_view(X_exog, ., evars,      touse)
+    n_obs = rows(d)
+    x1    = (X_exog, d, J(n_obs, 1, 1))
+    nxc   = cols(x1)
+    names = (evars, dname, "_cons")
+
+    b = st_matrix("_apexogPR_B")
+    V = st_matrix("_apexogPR_V")
+    K = cols(b)
+    cstripe = st_matrixcolstripe("_apexogPR_B")
+    eq1 = cstripe[1, 1]
+    n1  = sum(cstripe[., 1] :== eq1)
+    if (n1 != nxc) {
+        _error("_apexogfit_bp_aie: biprobit outcome equation has " + strofreal(n1) +
+               " columns; expected " + strofreal(nxc) + " ([exog d _cons]).")
+    }
+    b1 = b[|1 \ n1|]
+
+    ix = .; iz = .; ixz = .
+    for (j = 1; j <= nxc - 1; j++) {
+        if (names[j] == aiex)  ix  = j
+        if (names[j] == aiez)  iz  = j
+        if (names[j] == aiexz) ixz = j
+    }
+    if (ix == . | iz == . | ixz == .) {
+        _error("_apexogfit_bp_aie: interactors or their product not found in the outcome equation.")
+    }
+
+    eta = x1 * b1' + off
+    st_numscalar("_apexogMPHI",   mean(normalden(eta)))
+    st_numscalar("_apexogSTILDE", 1)
+
+    aie_i = J(n_obs, 1, 0)
+    J1    = J(1, nxc, 0)
+    if (aie_case == 3) {
+        for (j = 0; j <= 1; j++) {
+            for (k = 0; k <= 1; k++) {
+                s  = (j == k) ? 1 : -1
+                xc = x1
+                xc[., ix]  = J(n_obs, 1, j)
+                xc[., iz]  = J(n_obs, 1, k)
+                xc[., ixz] = J(n_obs, 1, j*k)
+                ec    = xc * b1' + off
+                aie_i = aie_i + s :* normal(ec)
+                J1    = J1 + s :* mean(normalden(ec) :* xc)
+            }
+        }
+    }
+    else if (aie_case == 1 | aie_case == 2) {
+        // case 1: X continuous, Z binary; case 2: X binary, Z continuous
+        ic = (aie_case == 1) ? ix : iz
+        ib = (aie_case == 1) ? iz : ix
+        Cv = x1[., ic]
+        for (k = 0; k <= 1; k++) {
+            s  = (k == 1) ? 1 : -1
+            xc = x1
+            xc[., ib]  = J(n_obs, 1, k)
+            xc[., ixz] = Cv :* k
+            ec = xc * b1' + off
+            ph = normalden(ec)
+            cc = b1[ic] + k * b1[ixz]
+            aie_i = aie_i + s :* (ph :* cc)
+            Jk = mean((-ec :* ph :* cc) :* xc)
+            Jk[ic] = Jk[ic] + mean(ph)
+            if (k == 1) Jk[ixz] = Jk[ixz] + mean(ph)
+            J1 = J1 + s :* Jk
+        }
+    }
+    else {
+        _error("_apexogfit_bp_aie: aie_case " + strofreal(aie_case) +
+               " is not supported with the bivariate probit (the treatment is binary).")
+    }
+    aie = mean(aie_i)
+
+    Jb = J(1, K, 0)
+    Jb[|1 \ nxc|] = J1
+    se_sq = (Jb * V * Jb')[1, 1]
+    if (se_sq < 0) {
+        printf("{err}_apexogfit_bp_aie: J*V*J' = %g < 0.\n", se_sq)
+        se = .
+    }
+    else se = sqrt(se_sq)
+    z_crit = invnormal(1 - (1 - level)/2)
+
+    st_matrix(mname_ape, (aie))
+    st_matrix(mname_se,  (se))
+    st_matrix(mname_lo,  (aie - z_crit*se))
+    st_matrix(mname_hi,  (aie + z_crit*se))
+    st_matrixrowstripe(mname_ape, ("", "AIE"))
+    st_matrixrowstripe(mname_se,  ("", "AIE"))
+    st_matrixrowstripe(mname_lo,  ("", "AIE"))
+    st_matrixrowstripe(mname_hi,  ("", "AIE"))
     st_matrix("_apexogVTGT", J(1, 1, se^2))
 }
 

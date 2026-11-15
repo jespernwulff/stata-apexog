@@ -18,6 +18,20 @@ d   first-stage term) computed in Mata; at gamma = 0 the point estimate
 d   matches cfprobit + margins, dydx() to machine precision and the SE
 d   differs from it by the direct term only (about 1%).
 d
+d   Features (v0.22.0):
+d     - firststage(biprobit) accepts an AIE target: the interaction of the
+d       0/1 treatment with an exogenous moderator, binary or continuous, e.g.
+d       (d = z c.z#c.m), firststage(biprobit) target(i.d#i.m) with m among
+d       the controls.  The product enters the outcome equation of the joint
+d       fit only; the AIE is the interaction contrast of the average
+d       structural function under joint normality, with an MLE delta-method
+d       SE (equal to biprobit + margins).
+d     - FIX: the standard error of a binary-by-binary AIE with the
+d       control-function engine.  The Jacobian entries of the two interactors
+d       and their product were wrong through v0.21.2 (point estimates were
+d       not affected; in the validation data the corrected SE is 3% to 13%
+d       larger).  Every other result is unchanged.
+d
 d   Features (v0.21.2):
 d     - display and documentation only; no estimate, standard error or
 d       interval changes.  The header's standard-error label reads
@@ -185,7 +199,7 @@ d Author: Jesper N. Wulff, Department of Economics and Business Economics, Aarhu
 d Support: email jwulff@econ.au.dk or https://github.com/jespernwulff/stata-apexog
 d License: MIT (https://github.com/jespernwulff/stata-apexog/blob/main/LICENSE)
 d
-d Distribution-Date: 20261114
+d Distribution-Date: 20261115
 d
 f apexog.ado
 f apexog.sthlp

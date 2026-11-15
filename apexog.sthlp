@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.21.2  2026-11-14}{...}
+{* *! version 0.22.0  2026-11-15}{...}
 {vieweralsosee "[R] cfprobit" "help cfprobit"}{...}
 {vieweralsosee "[R] cfregress" "help cfregress"}{...}
 {vieweralsosee "[R] biprobit" "help biprobit"}{...}
@@ -195,9 +195,12 @@ delta-method SE from the joint-MLE {cmd:e(V)} (robust or cluster, as
 requested).  There is no generated regressor and hence no Murphy-Topel step.
 This is the exact estimator when the structural errors are jointly normal,
 where the generalized-residual control function of {opt probit} is only an
-approximation; see {help apexog##gr:Methods and formulas}.  Not available
-with an AIE target.  {opt gunits(structural)} is accepted and identical to the
-default for this engine (sigma_tilde = 1).{p_end}
+approximation; see {help apexog##gr:Methods and formulas}.  Since version
+0.22.0 it also accepts an AIE target: the interaction of the treatment with
+an exogenous moderator, the moderator among the controls and the treatment
+alone in the clause; see {help apexog##bpaie:AIE with the bivariate probit}.
+{opt gunits(structural)} is accepted and identical to the default for this
+engine (sigma_tilde = 1).{p_end}
 
 {pstd}
 {ul:Which one for a binary treatment?}  {opt probit} reproduces
@@ -256,7 +259,10 @@ When an interactor is endogenous, the {it:X} * {it:d} tempvar is
 automatically EXCLUDED from that endog's first-stage regression
 (otherwise the first stage would be circular).  The Murphy-Topel
 correction propagates first-stage uncertainty into the AIE delta-method
-SE in all three cases.  Multi-level factor (3+ unique non-{0,1} values)
+SE in all three cases.  With {opt firststage(biprobit)} the product enters
+the outcome equation of the joint fit only, and the AIE must involve the
+0/1 treatment and an exogenous moderator (v0.22.0; see
+{help apexog##bpaie:AIE with the bivariate probit}).  Multi-level factor (3+ unique non-{0,1} values)
 interactors are not supported in v0.9.
 
 {dlgtab:UCI}
@@ -566,17 +572,26 @@ and a few exogenous controls/moderators).  Paste it in to follow along:
 {phang}{cmd:. apexog uci promoted tenure manager (c.training c.training#c.manager = subsidy c.subsidy#i.manager),}{p_end}
 {phang}{cmd:      target(c.training#i.manager) gmin(-0.3 -0.3) gmax(0.3 0.3) grid(11)}{p_end}
 
-{pstd}{it:Note:} the older {cmd:aie(d X)} form (with d in a single endog clause
-{cmd:(d = Zinst)}) treats {cmd:d*X} as an exogenous control -- a mis-specification
-when d is endogenous.  Prefer the explicit two-endog form above.{p_end}
+{pstd}{it:Note:} with the control-function engine the older {cmd:aie(d X)} form
+(with d in a single endog clause {cmd:(d = Zinst)}) treats {cmd:d*X} as an
+exogenous control -- a mis-specification when d is endogenous.  Prefer the
+explicit two-endog form above.  With {opt firststage(biprobit)} the single-clause
+form is the right one, because the treatment is modelled jointly with the outcome
+and the product needs no first stage of its own.{p_end}
+
+{pstd}{ul:A binary treatment interacted with a moderator: the recursive bivariate}
+{ul:probit (v0.22.0).  The moderator is a control, the treatment stands alone}
+{ul:in the clause, and the interacted instrument may carry its own violation:}{p_end}
+{phang}{cmd:. apexog uci promoted tenure manager (certified = subsidy c.subsidy#i.manager), firststage(biprobit)}{p_end}
+{phang}{cmd:      target(i.certified#i.manager) gmin(-0.1 0) gmax(0.1 0) grid(11)}{p_end}
 
 {pstd}{it:Moderator type.}  For an endogenous-treatment interaction, the moderator
 type is set by the prefix in {opt target()}: {cmd:target(c.d#c.W)} gives the
 cts-by-cts cross-partial, {cmd:target(c.d#i.W)} the cts-by-binary first
 difference (validated to machine precision against the manual decomposition for a
-binary exogenous moderator).  A binary {it:endogenous treatment} (probit first
-stage with a generalized-residual control function for the interaction) is not yet
-supported on this path.{p_end}
+binary exogenous moderator).  For a binary {it:endogenous treatment} this path
+gives a descriptive contrast only (the header says so); use
+{opt firststage(biprobit)} as in the example above.{p_end}
 
 {pstd}{it:cfinteract scope.}  {cmd:cfinteract} adds the {bf:pairwise} products of
 the control functions.  For two endogenous regressors (the canonical
@@ -599,11 +614,11 @@ silently wrong answer:
 {phang2}- {it:depvar}, the controls, the endogenous regressors, and the instruments must be disjoint.  An instrument that merely duplicates a control (e.g. the main effect of a {cmd:##} term) is dropped by the full-rank cleaning with a note.{p_end}
 {phang2}- {opt gmin()} may not exceed {opt gmax()}; {opt grid()} must be at least 2; {opt omega()} must be positive; {opt iterations()} must be at least 10.{p_end}
 {phang2}- {opt firststage(probit)} needs a 0/1 endogenous regressor, {opt firststage(fprobit)} one in [0,1], and {opt firststage(poisson)} a nonnegative one.{p_end}
-{phang2}- {opt firststage(biprobit)} needs a 0/1 endogenous regressor that is the ONLY endogenous regressor and no AIE target; several endogenous regressors, {opt aie()}/{opt target(c.X#i.d)}, or {opt estimator(biprobit)} with it stop with an explicit message.{p_end}
+{phang2}- {opt firststage(biprobit)} needs a 0/1 endogenous regressor that is the ONLY endogenous regressor.  An AIE target must interact it with an exogenous moderator (v0.22.0).  Several endogenous regressors, the endogenous-interaction clause {cmd:(c.d c.d#c.m = ...)}, an AIE of two exogenous variables, a {cmd:c.} prefix on the treatment in {opt target()}, or {opt estimator(biprobit)} stop with an explicit message.{p_end}
 {phang2}- {ul:Nonlinear first stages are approximations.}  With {opt firststage(probit)}, {opt fprobit}, or {opt poisson} the control function is Wooldridge's (2014, 2015) generalized residual.  It is consistent for the APE under his sufficiency assumption D(eps | z, d) = D(eps | GR), which does NOT hold under joint normality of the structural errors; there the two-step APE is biased, increasingly so in the endogeneity correlation (-2.7%, -11.6%, -50.6% at error correlations 0.3, 0.5, 0.8 in the large-N check under {help apexog##gr:Methods and formulas}).  {cmd:apexog} reproduces {cmd:cfprobit} exactly, so this is a property of the estimator, not of the implementation.  For a 0/1 treatment under joint normality use {opt firststage(biprobit)}; the results header carries the same note whenever one of these first stages is used.{p_end}
 {phang2}- {ul:gunits(structural) is a linear-first-stage conversion.}  The sigma_tilde rescaling behind {opt gunits(structural)} (and the "1 structural-latent unit of gamma = 1/sigma_tilde latent-index units" header line) is derived for a linear first stage.  With {opt firststage(probit)}, {opt fprobit}, or {opt poisson} Monte Carlo simulations put the correct offset at the UNSCALED structural gamma (Wald coverage at the true violation 0.936 vs 0.590 for binary d and 0.949 vs 0.877 for fractional d, raw gamma vs gamma/sqrt(1 - rho^2); zero-bias offset within 5% of the structural gamma), so the option should not be used with those first stages.  {cmd:apexog} accepts the combination but prints a warning line in the results header (results unchanged), and {cmd:e(stilde)} is then the linear formula evaluated on a generalized residual, not a conversion factor.  Elicit on the index scale or with {opt gunits(pr)} instead; see {help apexog##gunits:gunits()}.{p_end}
 {phang2}- {ul:gunits(structural) uses the baseline sigma_tilde.}  The conversion is exact only at gamma = 0, and with one continuous endogenous regressor, one instrument and a linear first stage a structural value at or beyond |pi_z|/sigma_v in absolute value has no unique index-scale counterpart.  {cmd:apexog} accepts such values but prints the limit and a warning in the results header (results unchanged).  With a 0/1 regressor and a linear first stage the conversion is not derived at all, and the header warns of that instead; see {help apexog##gunits:gunits()}.{p_end}
-{phang2}- {ul:A 0/1 endogenous regressor with a linear first stage is a descriptive fit.}  The control-function model assumes a linear first stage with a normal error independent of the instruments, which a binary treatment cannot satisfy.  {cmd:apexog} accepts the combination ({cmd:(d = z)} with a 0/1 {it:d} defaults to it; {cmd:(i.d = z)} selects the probit first stage) and reports the fitted discrete change with its two-step standard error, but the results header notes that the effect is a descriptive fitted contrast without a causal interpretation or a causal coverage claim.  When a causal reading is intended use {opt firststage(biprobit)} (joint normality) or {opt firststage(probit)} (control-function sufficiency).  A 0/1 treatment inside an endogenous interaction has no validated alternative ({opt firststage(biprobit)} takes no AIE target) and is descriptive only.{p_end}
+{phang2}- {ul:A 0/1 endogenous regressor with a linear first stage is a descriptive fit.}  The control-function model assumes a linear first stage with a normal error independent of the instruments, which a binary treatment cannot satisfy.  {cmd:apexog} accepts the combination ({cmd:(d = z)} with a 0/1 {it:d} defaults to it; {cmd:(i.d = z)} selects the probit first stage) and reports the fitted discrete change with its two-step standard error, but the results header notes that the effect is a descriptive fitted contrast without a causal interpretation or a causal coverage claim.  When a causal reading is intended use {opt firststage(biprobit)} (joint normality) or {opt firststage(probit)} (control-function sufficiency).  For a 0/1 treatment inside an interaction use {opt firststage(biprobit)} with the treatment alone in the clause and the moderator among the controls (v0.22.0); the header note says so.{p_end}
 {phang2}- A first stage that drops observations (perfect prediction in a probit first stage) or leaves the control function undefined stops the command.  Perfect prediction or a collinear control function in the MAIN probit returns missing bounds with a warning instead.{p_end}
 {phang2}- Weights, the {cmd:svy} prefix, and {cmd:vce(bootstrap)} are not supported; wrap {cmd:apexog} in the {cmd:bootstrap} prefix for bootstrap inference.{p_end}
 {phang2}- Variable names are unabbreviated before use, so abbreviations work; names longer than 27 characters are truncated in {cmd:e(lb_}{it:endog}{cmd:)}/{cmd:e(ub_}{it:endog}{cmd:)} and in matrix column labels (Stata's 32-character name limit).{p_end}
@@ -869,6 +884,52 @@ exactly as for the control-function engine.  Fits after the baseline are
 warm-started from the baseline estimates.  {cmd:e(rho)} returns the estimated
 error correlation at the baseline fit.
 
+{marker bpaie}{...}
+{pstd}
+{ul:AIE with the bivariate probit (version 0.22.0).}  With
+{opt firststage(biprobit)} and a target such as {cmd:target(i.d#i.m)} or
+{cmd:target(i.d#c.m)}, where {it:m} is an exogenous control, {cmd:apexog} fits
+
+{p 8 8 2}{cmd:biprobit (depvar = indepvars d*m d, offset(z'gamma)) (d = iv indepvars)}{p_end}
+
+{pstd}
+The product d*m is a regressor of the outcome equation only.  It is a
+function of the treatment and an exogenous variable, and the treatment is
+modelled jointly with the outcome, so the product needs no first stage or
+control function of its own (with the control-function engine it does, and
+that construction has no structural interpretation for a 0/1 treatment).
+The instruments may include the product of an instrument and the moderator,
+which then carries its own violation.  The target is the interaction contrast
+of the average structural function under joint normality:
+
+{p 8 8 2}binary m:      AIE = mean( Phi(eta|1,1) - Phi(eta|1,0) - Phi(eta|0,1) + Phi(eta|0,0) ){p_end}
+{p 8 8 2}continuous m:  AIE = mean( phi(eta|d=1)*(b_m + b_dm) - phi(eta|d=0)*b_m ){p_end}
+
+{pstd}
+with eta the outcome index at the counterfactual values of d and m.  It is
+not the conditional-on-control-function object of the control-function engine.
+Identification of the interaction rests on joint normality of the outcome and
+treatment errors and the (plausibly violated) exclusion restriction, and on one
+error correlation and one treatment equation for every value of the
+moderator.  Under that restriction the interaction is also identified from
+treatment variation the instrument does not generate, so it can be far more
+precise than the instrumental-variable contrast, and can differ from it; when
+the estimated correlation is near zero it is close to the AIE of a probit that
+treats the treatment as exogenous.  Fitting {cmd:biprobit} separately for each
+value of a binary moderator relaxes the restriction.  The
+delta-method SE uses the joint-MLE {cmd:e(V)} with a Jacobian built from the
+counterfactual design rows, zero for the treatment equation and athrho.
+Validation: the AIE and its SE equal {cmd:margins r.d#r.m, predict(pmarg1)}
+(binary m) and {cmd:margins r.d, dydx(m) predict(pmarg1)} (continuous m) after
+{cmd:biprobit} written with factor variables, at gamma = 0, at a nonzero
+violation, with the violation on the interacted instrument and with
+{cmd:vce(cluster)}, to 1e-10 or better.  In a simulation with bivariate-normal
+errors (correlation 0.5, n = 2,000, 300 replications per cell) the Wald
+interval at the true violation covered the sample AIE 0.953 (binary m, no
+violation), 0.933 (binary m, violation 0.1) and 0.967 (continuous m,
+violation 0.1), Monte Carlo SE about 0.013.  An AIE of two exogenous variables
+and a continuous treatment are not supported with this engine.
+
 {pstd}
 {it:Gamma scale with biprobit.}  The outcome-equation error of the recursive
 bivariate probit has unit variance, so the probit-index and structural-latent
@@ -1002,8 +1063,23 @@ The Jacobian wrt the full beta-vector (with special corrections for
 {cmd:b_X}, {cmd:b_Z}, and {cmd:b_XZ}, derived per case) is formed in
 closed form and passed through the same V_beta_MT.  The delta-method
 SE then incorporates the generated-regressor uncertainty from the first
-stage.  Verified against hand-coded analytic references to machine
-precision in all three cases.
+stage.  The point estimates are verified against hand-coded analytic
+references to machine precision in all three cases, and the standard errors
+against a two-step influence function whose derivatives are all taken
+numerically.
+
+{pstd}
+{ul:Binary-by-binary standard errors (fixed in version 0.22.0).}  In the
+second difference the two interactors and their product enter each
+counterfactual index at the values j, k and j*k, so their Jacobian entries
+are mean(phi_11 - phi_10), mean(phi_11 - phi_01) and mean(phi_11).  Versions
+through 0.21.2 used j - X_i, k - Z_i and j*k - X_i*Z_i instead, which is
+wrong for every observation with X_i = 1 or Z_i = 1.  The point estimate was
+unaffected; the standard error of a binary-by-binary AIE with the
+control-function engine was wrong (in the validation data the corrected SE is
+13% larger with a probit first stage and 3% larger with linear first stages).
+The continuous-by-continuous and continuous-by-binary cases were and are
+correct.
 
 
 {marker references}{...}
