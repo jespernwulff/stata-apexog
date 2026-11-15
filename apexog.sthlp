@@ -257,7 +257,13 @@ the appropriate AIE formula is used:
 
 When an interactor is endogenous, the {it:X} * {it:d} tempvar is
 automatically EXCLUDED from that endog's first-stage regression
-(otherwise the first stage would be circular).  The Murphy-Topel
+(otherwise the first stage would be circular).  Its control function then
+covers the product as well, so the product needs no instrument of its own
+(Wooldridge 2015, pp. 428-429, 437).  List the instruments interacted with the
+moderator in that endog's clause all the same, as in {cmd:(d = z c.z#c.X)}:
+the control function is right only if the first stage lets the instrument's
+effect on {it:d} differ with the moderator, and leaving them out biases the
+AIE when it does.  The Murphy-Topel
 correction propagates first-stage uncertainty into the AIE delta-method
 SE in all three cases.  With {opt firststage(biprobit)} the product enters
 the outcome equation of the joint fit only, and the AIE must involve the
@@ -554,10 +560,12 @@ and a few exogenous controls/moderators).  Paste it in to follow along:
 {phang}{cmd:. apexog uci promoted tenure manager (i.certified = subsidy), gmin(-0.1) gmax(0.1)} {it:// = firststage(probit)}{p_end}
 {phang}{cmd:. apexog uci promoted tenure (training coaching = subsidy grant), gmin(0 0) gmax(0 0) target(training)} {it:// only training's APE}{p_end}
 
-{pstd}{ul:Phase-2 syntax: target(c.X#i.d) for AIE with prefix-driven type (v0.11):}{p_end}
+{pstd}{ul:Phase-2 syntax: target(c.X#i.d) for AIE with prefix-driven type (v0.11).  When}
+{ul:the treatment is one of the interactors, its clause also lists the instrument}
+{ul:interacted with the moderator, and the violation is put on subsidy alone:}{p_end}
 {phang}{cmd:. apexog uci promoted tenure experience (training = subsidy), gmin(-0.3) gmax(0.3) target(c.tenure#c.experience)} {it:// cts-by-cts AIE}{p_end}
-{phang}{cmd:. apexog uci promoted tenure (i.certified = subsidy), gmin(-0.3) gmax(0.3) target(c.tenure#i.certified)} {it:// cts-by-binary (firstdiff)}{p_end}
-{phang}{cmd:. apexog uci promoted manager (i.certified = subsidy), gmin(-0.3) gmax(0.3) target(i.manager#i.certified)} {it:// binary-by-binary}{p_end}
+{phang}{cmd:. apexog uci promoted tenure (i.certified = subsidy c.subsidy#c.tenure), gmin(-0.3 0) gmax(0.3 0) target(c.tenure#i.certified)} {it:// cts-by-binary (firstdiff)}{p_end}
+{phang}{cmd:. apexog uci promoted manager (i.certified = subsidy c.subsidy#i.manager), gmin(-0.3 0) gmax(0.3 0) target(i.manager#i.certified)} {it:// binary-by-binary}{p_end}
 
 {pstd}{ul:Sensitivity of the Average Interaction Effect for two exogenous}
 {ul:moderators under plausible exclusion-restriction violations:}{p_end}
@@ -572,12 +580,20 @@ and a few exogenous controls/moderators).  Paste it in to follow along:
 {phang}{cmd:. apexog uci promoted tenure manager (c.training c.training#c.manager = subsidy c.subsidy#i.manager),}{p_end}
 {phang}{cmd:      target(c.training#i.manager) gmin(-0.3 -0.3) gmax(0.3 0.3) grid(11)}{p_end}
 
-{pstd}{it:Note:} with the control-function engine the older {cmd:aie(d X)} form
-(with d in a single endog clause {cmd:(d = Zinst)}) treats {cmd:d*X} as an
-exogenous control -- a mis-specification when d is endogenous.  Prefer the
-explicit two-endog form above.  With {opt firststage(biprobit)} the single-clause
-form is the right one, because the treatment is modelled jointly with the outcome
-and the product needs no first stage of its own.{p_end}
+{pstd}{it:Note:} with the control-function engine the treatment may instead stand
+alone in its clause, as in {cmd:(c.training = subsidy c.subsidy#i.manager)} with
+{cmd:target(c.training#i.manager)} (or the older {cmd:aie(training manager)}).  The
+treatment's control function then covers its product with the moderator, which
+enters the main probit without a first stage of its own (Wooldridge 2015,
+pp. 428-429, 437).  In both forms list the instruments interacted with the
+moderator: in the two-endog form they instrument the product (the command
+stops if there are fewer instruments than endogenous regressors), in the
+single-clause form they let the treatment's first stage differ with the
+moderator, which the control function needs.  Without them the single-clause
+AIE is biased whenever the instrument's effect on the treatment varies with
+the moderator.  With {opt firststage(biprobit)} the single-clause form is the
+only one: the treatment is modelled jointly with the outcome, and the product
+needs no first stage of its own.{p_end}
 
 {pstd}{ul:A binary treatment interacted with a moderator: the recursive bivariate}
 {ul:probit (v0.22.0).  The moderator is a control, the treatment stands alone}

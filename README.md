@@ -48,10 +48,10 @@ apexog uci y X (c.d = Zinst), gmin(-0.3) gmax(0.3) grid(11) target(c.d)
 
 You'll get a `Baseline (gamma = 0)` row (the cfprobit-style APE), followed by the **Union-of-CIs bounds** for the APE across the assumed γ range.
 
-For the **Average Interaction Effect** of, say, a continuous moderator × a binary endogenous treatment:
+For the **Average Interaction Effect** of the treatment `d` and the moderator `X`, list the instrument interacted with the moderator in the treatment's clause. The product `d×X` is endogenous because `d` is. The control function for `d` covers it, so it needs no instrument of its own (Wooldridge 2015, *Journal of Human Resources*, pp. 428–429, 437), but that control function is right only if the first stage of `d` lets the instrument's effect differ with `X`. Leaving `c.Zinst#c.X` out biases the AIE whenever it does. Here the violation is put on `Zinst` alone:
 
 ```stata
-apexog uci y X (i.d = Zinst), gmin(-0.3) gmax(0.3) grid(11) target(c.X#i.d)
+apexog uci y X (c.d = Zinst c.Zinst#c.X), gmin(-0.3 0) gmax(0.3 0) grid(11) target(c.d#c.X)
 ```
 
 The `i.` / `c.` prefixes drive both the first-stage default (`(i.d=...)` → `firststage(probit)`) and the AIE formula choice:
@@ -60,10 +60,18 @@ The `i.` / `c.` prefixes drive both the first-stage default (`(i.d=...)` → `fi
 - `target(c.X#i.d)` — cts × binary (firstdiff in the binary)
 - `target(i.X#i.d)` — binary × binary (2nd discrete difference)
 
-When the **interaction itself is endogenous** — the canonical case of an endogenous treatment `d` interacted with a moderator `X`, so `d#X` is endogenous too — declare the interaction as a *second endogenous regressor* and instrument it (typically with the base instruments and their moderator interactions), exactly as in `cfprobit` / `plausexog`. The control-function product (`cfinteract`) is added automatically, and the AIE is reported on the probability scale:
+Alternatively, as in `cfprobit` / `plausexog`, declare the interaction as a *second endogenous regressor* with a first stage of its own. It then needs at least as many instruments as endogenous regressors, typically the base instruments and their moderator interactions; the control-function product (`cfinteract`) is added automatically, and the AIE is reported on the probability scale:
 
 ```stata
-apexog uci y X (c.d c.d#c.X = Zinst c.Zinst#c.X), target(c.d#c.X) gmin(-0.3) gmax(0.3) grid(11)
+apexog uci y X (c.d c.d#c.X = Zinst c.Zinst#c.X), target(c.d#c.X) gmin(-0.3 0) gmax(0.3 0) grid(11)
+```
+
+For a **0/1 treatment**, the recursive bivariate probit models the treatment jointly with the outcome (v0.22.0). The treatment stands alone in its clause, the moderator is a control, and the interacted instrument enters the treatment equation:
+
+```stata
+gen byte db = (0.8*Zinst + 0.4*X + u) > 0
+gen byte yb = (-0.2 + 0.4*X + 0.5*db + 0.3*X*db + e) > 0
+apexog uci yb X (db = Zinst c.Zinst#c.X), firststage(biprobit) target(i.db#c.X) gmin(-0.1 0) gmax(0.1 0) grid(11)
 ```
 
 Factor-variable instruments (e.g. `dummy##c.eldisadv`) are supported: they are expanded and cleaned to full rank (base levels, the moderator main effect, and bare-vs-factor duplicates are dropped) so the Murphy-Topel variance is well-defined. A single `gmin`/`gmax`/`mu`/`omega` value is broadcast to all instruments.
@@ -79,7 +87,7 @@ Factor-variable instruments (e.g. `dummy##c.eldisadv`) are supported: they are e
   - `target(d)`, `target(c.d)` — APE for that endog
   - `target(d1 d2)` — APE for both
   - `target(c.X#i.d)` — AIE for the interaction (prefixes drive the formula)
-- **Endogenous-interaction AIE**: declare an endogenous treatment × moderator interaction as a second instrumented endogenous regressor — `(c.d c.d#c.X = ...)` with `target(c.d#c.X)` — with the control-function product (`cfinteract`) added automatically. Matches `cfprobit` + `ginteff` to machine precision.
+- **Endogenous-interaction AIE**: keep the treatment alone in its clause with the moderator-interacted instruments listed, `(c.d = z c.z#c.X)`, so that its control function covers the product; or declare the treatment × moderator interaction as a second instrumented endogenous regressor — `(c.d c.d#c.X = z c.z#c.X)` with `target(c.d#c.X)` — with the control-function product (`cfinteract`) added automatically. The second form matches `cfprobit` + `ginteff` to machine precision.
 - **Factor-variable instruments** are expanded and cleaned to full rank (base/collinear terms dropped); a single `gmin`/`gmax`/`mu`/`omega` value broadcasts to all instruments.
 - **Auto-detection** of binary endogenous regressors → discrete-change APE. With a linear first stage such a fit is a descriptive contrast, not a causal estimate, and the results header says so (v0.21.2); use `firststage(biprobit)` or `firststage(probit)` when a causal reading is intended.
 - **LTZ priors**: Gaussian via `mu()` + `omega()`, or non-Gaussian via `distribution(normal | uniform | chi2 | t | gamma | poisson | special)`.
