@@ -606,8 +606,11 @@ type is set by the prefix in {opt target()}: {cmd:target(c.d#c.W)} gives the
 cts-by-cts cross-partial, {cmd:target(c.d#i.W)} the cts-by-binary first
 difference (validated to machine precision against the manual decomposition for a
 binary exogenous moderator).  For a binary {it:endogenous treatment} this path
-gives a descriptive contrast only (the header says so); use
-{opt firststage(biprobit)} as in the example above.{p_end}
+gives a descriptive contrast with a linear first stage (the header says so)
+and, with a probit first stage ({cmd:i.} prefix), rests on the
+generalized-residual approximation (the header notes that too); neither has
+been validated against a matching data-generating process.  For a joint model
+of the treatment use {opt firststage(biprobit)} as in the example above.{p_end}
 
 {pstd}{it:cfinteract scope.}  {cmd:cfinteract} adds the {bf:pairwise} products of
 the control functions.  For two endogenous regressors (the canonical
